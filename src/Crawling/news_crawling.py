@@ -3,6 +3,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import WebDriverException
 
 import time
 import pandas as pd
@@ -10,6 +11,7 @@ import sys
 from typing import List, Any, Dict
 from pathlib import Path
 import json
+import subprocess
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -18,7 +20,10 @@ chrome_options = webdriver.ChromeOptions()
 chrome_options.add_argument("--headless")
 chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
-chrome_options.add_argument("--remote-debugging-port=9222")
+chrome_options.add_argument("--disable-gpu")
+chrome_options.add_argument("--window-size=1920,1080")
+chrome_options.add_argument("--disable-extensions")
+chrome_options.add_argument("--disable-software-rasterizer")
 
 from config import Config
 MAX_NEWS_COUNT = Config.MAX_NEWS_COUNT
@@ -27,119 +32,159 @@ NEWS_FILE_PATH = Config.NEWS_FILE_PATH
 NEWS_DB_PATH = Config.NEWS_DB_PATH
 
 class News_Crawler:
+    def _kill_stale_driver_processes(self, kill_chrome: bool = False):
+        """Windows 환경에서 잔여 chromedriver/chrome 프로세스를 정리."""
+        commands = ["taskkill /F /IM chromedriver.exe /T"]
+        if kill_chrome:
+            commands.append("taskkill /F /IM chrome.exe /T")
+
+        for cmd in commands:
+            try:
+                subprocess.run(
+                    cmd,
+                    shell = True,
+                    check = False,
+                    stdout = subprocess.DEVNULL,
+                    stderr = subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
+
+    def _create_driver(self, chrome_options, retries: int = 2):
+        """WebDriver 생성 재시도. 실패 시 프로세스를 정리하고 재시도."""
+        last_error = None
+        for attempt in range(1, retries + 1):
+            try:
+                return webdriver.Chrome(options = chrome_options)
+            except WebDriverException as e:
+                last_error = e
+                print(f"WebDriver 생성 실패 ({attempt}/{retries}): {e}")
+                self._kill_stale_driver_processes(kill_chrome = (attempt == retries))
+                time.sleep(2)
+        raise last_error
+
     def get_news_html_count(self, ticker, news_count = 10, chrome_options = chrome_options):
         """정해진 개수만큼의 뉴스 가져오기"""
-        driver = webdriver.Chrome(options = chrome_options)
-        driver_url = f"https://finance.yahoo.com/quote/{ticker}/press-releases/"
-        driver.get(driver_url)
-        time.sleep(3)
-        news_texts, html_paths = [], []
-        i = 1
-        consecutive_missing = 0
-        max_scan = max(news_count * 10, 50)
-
+        driver = None
         try:
-            wait = WebDriverWait(driver, 10)
-            cookie_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@name='agree']")))
-            cookie_btn.click()
-            time.sleep(2)
-        except TimeoutException:
-            pass
+            driver = self._create_driver(chrome_options)
+            driver_url = f"https://finance.yahoo.com/quote/{ticker}/press-releases/"
+            driver.get(driver_url)
+            time.sleep(3)
+            news_texts, html_paths = [], []
+            i = 1
+            consecutive_missing = 0
+            max_scan = max(news_count * 10, 50)
 
-        try:
-            while len(news_texts) < news_count and i <= max_scan:
-                news_path = f'//*[@id="main-content-wrapper"]/section[3]/section/div/div/div/div/ul/li[{i}]'
-                html_path = f'//*[@id="main-content-wrapper"]/section[3]/section/div/div/div/div/ul/li[{i}]/section/a'
+            try:
+                wait = WebDriverWait(driver, 10)
+                cookie_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@name='agree']")))
+                cookie_btn.click()
+                time.sleep(2)
+            except TimeoutException:
+                pass
 
-                try:
-                    news = driver.find_element(By.XPATH, news_path)
-                    news_text = news.get_attribute("class") # 여기에 story-item 대신 ad-item 있으면 광고인 것
+            try:
+                while len(news_texts) < news_count and i <= max_scan:
+                    news_path = f'//*[@id="main-content-wrapper"]/section[3]/section/div/div/div/div/ul/li[{i}]'
+                    html_path = f'//*[@id="main-content-wrapper"]/section[3]/section/div/div/div/div/ul/li[{i}]/section/a'
 
-                    if "ad-item" in news_text:
-                        print(f"{i}번째 뉴스를 건너뜁니다. (광고)")
-                    else:
-                        html_text = driver.find_element(By.XPATH, html_path).get_attribute("href")
-                        news_texts.append(news_text)
-                        html_paths.append(html_text)
-                        print(f"[{len(news_texts)}/{news_count}] 뉴스 HTML 수집 성공 !")
-                    consecutive_missing = 0
-                    i += 1
+                    try:
+                        news = driver.find_element(By.XPATH, news_path)
+                        news_text = news.get_attribute("class") # 여기에 story-item 대신 ad-item 있으면 광고인 것
 
-                except NoSuchElementException:
-                    print("No HTML element found")
-                    consecutive_missing += 1
-                    i += 1
-                    if consecutive_missing >= 10:
-                        print("연속으로 요소를 찾지 못해 탐색을 종료합니다.")
-                        break
+                        if "ad-item" in news_text:
+                            print(f"{i}번째 뉴스를 건너뜁니다. (광고)")
+                        else:
+                            html_text = driver.find_element(By.XPATH, html_path).get_attribute("href")
+                            news_texts.append(news_text)
+                            html_paths.append(html_text)
+                            print(f"[{len(news_texts)}/{news_count}] 뉴스 HTML 수집 성공 !")
+                        consecutive_missing = 0
+                        i += 1
 
-                except Exception as e:
-                    print(f"뉴스 검색을 실패했습니다 : {e}")
-                    consecutive_missing += 1
-                    i += 1
-                    if consecutive_missing >= 10:
-                        print("연속 오류로 탐색을 종료합니다.")
-                        break
+                    except NoSuchElementException:
+                        print("No HTML element found")
+                        consecutive_missing += 1
+                        i += 1
+                        if consecutive_missing >= 10:
+                            print("연속으로 요소를 찾지 못해 탐색을 종료합니다.")
+                            break
 
+                    except Exception as e:
+                        print(f"뉴스 검색을 실패했습니다 : {e}")
+                        consecutive_missing += 1
+                        i += 1
+                        if consecutive_missing >= 10:
+                            print("연속 오류로 탐색을 종료합니다.")
+                            break
+
+            except Exception as e:
+                print(f"뉴스 검색을 실패했습니다 : {e}")
         finally:
-            driver.quit()
+            if driver:
+                driver.quit()
 
         return news_texts, html_paths
 
 
     def get_news_html_all(self, ticker, chrome_options):
         """현재 상태의 뉴스 (최대 {MAX_NEWS_COUNT}개) 전부 가져오기"""
-        driver = webdriver.Chrome(options = chrome_options)
-        driver_url = f"https://finance.yahoo.com/quote/{ticker}/press-releases/"
-        driver.get(driver_url)
-        time.sleep(3)
-        news_texts, html_paths = [], []
-
+        driver = None
         try:
-            wait = WebDriverWait(driver, 10)
-            cookie_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@name='agree']")))
-            cookie_btn.click()
-            time.sleep(2)
-        except TimeoutException:
-            pass
+            driver = self._create_driver(chrome_options)
+            driver_url = f"https://finance.yahoo.com/quote/{ticker}/press-releases/"
+            driver.get(driver_url)
+            time.sleep(3)
+            news_texts, html_paths = [], []
 
-        try:
-            news_path = '//*[@id="main-content-wrapper"]/section[3]/section/div/div/div/div/ul/li'
-            html_path = ".//section/a"
-            items = driver.find_elements(By.XPATH, news_path)
-            print(f"총 {len(items)}개의 뉴스를 찾았습니다.")
+            try:
+                wait = WebDriverWait(driver, 10)
+                cookie_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@name='agree']")))
+                cookie_btn.click()
+                time.sleep(2)
+            except TimeoutException:
+                pass
 
-            for i, item in enumerate(items, 1):
-                if len(news_texts) >= MAX_NEWS_COUNT:
-                    break
-                try:
-                    news_text = item.get_attribute("class") or ""
+            try:
+                news_path = '//*[@id="main-content-wrapper"]/section[3]/section/div/div/div/div/ul/li'
+                html_path = ".//section/a"
+                items = driver.find_elements(By.XPATH, news_path)
+                print(f"총 {len(items)}개의 뉴스를 찾았습니다.")
 
-                    if "ad-item" in news_text:
-                        print(f"{i}번째 뉴스를 건너뜁니다. (광고)")
+                for i, item in enumerate(items, 1):
+                    if len(news_texts) >= MAX_NEWS_COUNT:
+                        break
+                    try:
+                        news_text = item.get_attribute("class") or ""
+
+                        if "ad-item" in news_text:
+                            print(f"{i}번째 뉴스를 건너뜁니다. (광고)")
+                            continue
+
+                        link_elements = item.find_elements(By.XPATH, html_path)
+                        if not link_elements:
+                            print(f"{i}번째 뉴스 링크를 찾지 못해 건너뜁니다.")
+                            continue
+
+                        html_text = link_elements[0].get_attribute("href")
+                        if not html_text:
+                            print(f"{i}번째 뉴스 href가 비어 있어 건너뜁니다.")
+                            continue
+
+                        news_texts.append(news_text)
+                        html_paths.append(html_text)
+                        print(f"[{len(news_texts)}/{MAX_NEWS_COUNT}] 뉴스 HTML 수집 성공 !")
+
+                    except Exception as e:
+                        print(f"{i}번째 뉴스 처리 실패 : {e}")
                         continue
 
-                    link_elements = item.find_elements(By.XPATH, html_path)
-                    if not link_elements:
-                        print(f"{i}번째 뉴스 링크를 찾지 못해 건너뜁니다.")
-                        continue
-
-                    html_text = link_elements[0].get_attribute("href")
-                    if not html_text:
-                        print(f"{i}번째 뉴스 href가 비어 있어 건너뜁니다.")
-                        continue
-
-                    news_texts.append(news_text)
-                    html_paths.append(html_text)
-                    print(f"[{len(news_texts)}/{MAX_NEWS_COUNT}] 뉴스 HTML 수집 성공 !")
-
-                except Exception as e:
-                    print(f"{i}번째 뉴스 처리 실패 : {e}")
-                    continue
-
-        except Exception as e:
-            print(f"뉴스 목록 검색 실패 : {e}")
-        driver.quit()
+            except Exception as e:
+                print(f"뉴스 목록 검색 실패 : {e}")
+        finally:
+            if driver:
+                driver.quit()
         # 중복 URL 제거 (순서 유지)
         unique_paths = list(dict.fromkeys(html_paths))
         if len(unique_paths) != len(html_paths):
@@ -225,8 +270,9 @@ class News_Crawler:
         html에 해당하는 뉴스 내용 수집
         -> [{metadata[Dict], content[List[Any | pd.DataFrame]]}]
         """
+        driver = None
         try:
-            driver = webdriver.Chrome(options = chrome_options)
+            driver = self._create_driver(chrome_options)
         except Exception as e:
             print(f"WebDriver 실행 중 오류 발생 : {e}")
             return []
@@ -317,7 +363,8 @@ class News_Crawler:
                 print(f"오류 발생 : {e}")
                 continue
 
-        driver.quit()
+        if driver:
+            driver.quit()
 
         return scraped_news
 

@@ -2,12 +2,9 @@ import os
 from dotenv import load_dotenv
 load_dotenv(".env")
 
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from src.Multi_Agent.states import DebateAgentState
 from src.Multi_Agent.functions import load_prompts, save_conversation_history, save_final_consensus
-
-llm = ChatOpenAI(model="gpt-4o", temperature = 0.5)
 
 def optimistic_initial_node(state : DebateAgentState):
     """

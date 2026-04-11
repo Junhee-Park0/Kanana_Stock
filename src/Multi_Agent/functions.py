@@ -2,6 +2,7 @@ from typing import List, Dict, Literal
 from pathlib import Path
 import json, yaml
 import os, sys
+from datetime import datetime
 from src.Fetch_Data.get_context import GetContext
 from src.Multi_Agent.states import DebateAgentState
 
@@ -42,7 +43,8 @@ def save_conversation_history(ticker : str, conversation_history : str) -> None:
     Returns:
         None
     """
-    path = Path(f"data/debate/{ticker}_conversation_history.txt")
+    datetime = datetime.now().strftime("%Y%m%d")
+    path = Path(f"data/debate/{ticker}/{datetime}/conversation_history.txt")
     if not path.exists():
         path.parent.mkdir(parents = True, exist_ok = True)
     with open(path, "w", encoding = "utf-8") as f:
@@ -57,7 +59,8 @@ def save_final_consensus(ticker : str, final_consensus : str) -> None:
     Returns:
         None
     """ 
-    path = Path(f"data/debate/{ticker}_final_consensus.txt")
+    datetime = datetime.now().strftime("%Y%m%d")
+    path = Path(f"data/debate/{ticker}/{datetime}/final_consensus.txt")
     if not path.exists():
         path.parent.mkdir(parents = True, exist_ok = True)
     with open(path, "w", encoding = "utf-8") as f:

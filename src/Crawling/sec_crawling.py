@@ -53,6 +53,7 @@ class SEC_Crawler:
             response.raise_for_status()
             sec_json = response.json()
             sec_data = pd.DataFrame(sec_json['filings']['recent'])
+            sec_data['filingDate'] = pd.to_datetime(sec_data['filingDate'])
 
             # 10-K, 10-Q가 최근에 있었다면 포함
             k_filing = sec_data[sec_data['form'] == '10-K'].head(1)
@@ -60,7 +61,6 @@ class SEC_Crawler:
 
             # 8-K, SC 13G, 4, DEF 14A는 최신 몇 개만 포함
             threshold_date = datetime.now() - timedelta(days = dates)
-            sec_data['filingDate'] = pd.to_datetime(sec_data['filingDate'])
             recent_events = sec_data[
                 (sec_data['filingDate'] >= threshold_date) &
                 (sec_data['form'].isin(['8-K', 'SC 13G', '4', 'DEF 14A']))

@@ -18,8 +18,6 @@ class SEC_Database:
                 file_name TEXT NOT NULL, /* 파일 이름 */
                 ticker TEXT, /* 티커 */
                 form TEXT, /* 공시 형식 */
-                document_type TEXT, /* 문서 타입 */
-                company_name TEXT, /* 회사 이름 */
                 reporter_name TEXT, /* 신고자 이름 */
                 filed_date TEXT, /* 공시 날짜 */
                 raw_metadata TEXT, /* 원본 json */
@@ -51,29 +49,15 @@ class SEC_Database:
         )
         conn.commit()
 
-    def _get_form(self, document_type: str) -> str:
-        if document_type == "4":
-            return "4"
-        if document_type and "13G" in document_type.upper():
-            return "SC 13G"
-        if document_type == "GENERAL_HTML":
-            return "8-K"
-        if document_type in {"10-K", "10-Q", "8-K", "DEF 14A"}:
-            return document_type
-        return "UNKNOWN"
-
     def _extract_filing(self, parsed_path: Path) -> Tuple[Dict, List[Tuple[str, str]]]:
         with open(parsed_path, "r", encoding = "utf-8") as f:
             data = json.load(f)
 
         if not isinstance(data, dict):
-            data = {"document_type": "UNKNOWN", "raw": data}
+            data = {"form": "UNKNOWN", "raw": data}
 
-        doc_type = data.get("document_type", "UNKNOWN")
         metadata = {
-            "document_type": doc_type,
-            "form": self._get_form(doc_type),
-            "company_name": data.get("company_name"),
+            "form": data.get("form", "UNKNOWN"),
             "reporter_name": data.get("reporter_name"),
             "ticker": data.get("ticker"),
             "filed_date": data.get("period_of_report") or data.get("event_date") or data.get("period_end_date"),
@@ -122,17 +106,15 @@ class SEC_Database:
                     cursor.execute(
                         """
                         INSERT INTO Filings (
-                            parsed_path, file_name, ticker, form, document_type,
-                            company_name, reporter_name, filed_date, raw_metadata
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            parsed_path, file_name, ticker, form, 
+                            reporter_name, filed_date, raw_metadata
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             str(parsed_path),
                             parsed_path.name,
                             ticker_value,
                             metadata["form"],
-                            metadata["document_type"],
-                            metadata["company_name"],
                             metadata["reporter_name"],
                             metadata["filed_date"],
                             metadata["raw_metadata"],
@@ -200,8 +182,8 @@ class SEC_Database:
             cursor = conn.cursor()
 
             query = """
-                SELECT filing_id, parsed_path, file_name, ticker, form, document_type,
-                       company_name, reporter_name, filed_date, created_at
+                SELECT filing_id, parsed_path, file_name, ticker, form,
+                       reporter_name, filed_date, created_at
                 FROM Filings
                 ORDER BY filed_date DESC, created_at DESC
             """
