@@ -1,0 +1,25 @@
+# Core
+pandas
+requests
+python-dotenv
+beautifulsoup4
+lxml
+selenium
+
+# Agent
+torch==2.6.0                   
+pydantic>=2.7.4                
+python-dotenv>=1.0.0           
+PyYAML>=6.0                   
+
+# Kanana
+transformers==4.57.3
+accelerate
+sentencepiece
+
+# Notebook (optional)
+ipykernel
+
+# FastAPI server
+fastapi>=0.111.0               
+uvicorn[standard]>=0.30.0      

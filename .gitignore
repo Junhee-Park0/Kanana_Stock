@@ -1,0 +1,12 @@
+.venv/
+**/__pycache__/
+**/*.pyc
+.env
+
+# 제외할 파일들
+/logs
+/data 
+/test
+/database
+/Kanana_Model
+**/ipynb_files/
