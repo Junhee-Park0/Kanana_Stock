@@ -9,6 +9,7 @@ from src.Crawling.sec_crawling import SEC_Crawler
 
 class SEC_Database:
     def _init_db(self, conn: sqlite3.Connection):
+        """SQLite 테이블/인덱스 생성"""
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -50,6 +51,7 @@ class SEC_Database:
         conn.commit()
 
     def _extract_filing(self, parsed_path: Path) -> Tuple[Dict, List[Tuple[str, str]]]:
+        """파싱된 json 파일에서 필요한 부분 추출"""
         with open(parsed_path, "r", encoding = "utf-8") as f:
             data = json.load(f)
 
@@ -84,6 +86,7 @@ class SEC_Database:
         return metadata, blocks
 
     def save_data_to_db(self, parsed_paths: List[Path], db_path: Path) -> bool:
+        """추출한 부분을 Filing/Content 테이블에 저장"""
         conn = None
         try:
             db_path = Path(db_path)
@@ -156,6 +159,7 @@ class SEC_Database:
                 print("SEC DB 연결 종료")
 
     def compare_sec_db(self, db_path: Path, parsed_path: Path) -> bool:
+        """이미 있는 기업이라면 새로운 공시가 있는지 확인"""
         query = "SELECT 1 FROM Filings WHERE parsed_path = ?"
         conn = None
         try:
@@ -173,6 +177,7 @@ class SEC_Database:
                 conn.close()
 
     def get_filings_sorted_by_date(self, db_path: Path, limit: Optional[int] = None) -> List[Dict]:
+        """공시 날짜 기준 정렬"""
         conn = None
         try:
             if not Path(db_path).exists():
@@ -201,6 +206,7 @@ class SEC_Database:
                 conn.close()
 
     def crawl_and_update_sec_db(self, ticker: str, db_path: Path, dates: int = 14):
+        """[최종] SEC 공시 데이터 수집, 파싱 후 중복 제거하여 DB에 저장"""
         crawler = SEC_Crawler()
         ticker = ticker.upper()
         # 데이터 수집

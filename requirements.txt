@@ -5,12 +5,15 @@ python-dotenv
 beautifulsoup4
 lxml
 selenium
+dotenv
 
 # Agent
-torch==2.6.0                   
-pydantic>=2.7.4                
-python-dotenv>=1.0.0           
-PyYAML>=6.0                   
+torch==2.6.0
+pydantic>=2.7.4
+PyYAML>=6.0
+langchain>=0.3.0
+langchain-core>=0.3.0
+langgraph>=0.2.0
 
 # Kanana
 transformers==4.57.3

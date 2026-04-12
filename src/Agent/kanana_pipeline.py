@@ -1,6 +1,6 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline as hf_pipeline
-from typing import Any, Optional
+from typing import Any, Optional, List
 import os
 import sys
 import time
@@ -246,3 +246,61 @@ def call_kanana_structured(system_prompt: str, user_input: dict, output_schema: 
             from utils.logger import log_error
             log_error(e, f"call_kanana_structured - Schema: {output_schema.__name__}")
         raise
+
+# 툴 바인딩을 위한..
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import BaseMessage, AIMessage, SystemMessage, HumanMessage
+from langchain_core.outputs import ChatResult, ChatGeneration
+from pydantic import Field
+
+class ChatKanana(BaseChatModel):
+    """LangChain 에이전트와 호환되는 Kanana 커스텀 채팅 모델 클래스"""
+    model_name : str = "Kanana-Local"
+    max_new_tokens : int = 512
+
+    def bind_tools(self, tools, **kwargs):
+        """
+        LangGraph create_react_agent 호환을 위한 최소 구현.
+        Kanana는 네이티브 tool-calling 포맷을 지원하지 않으므로
+        현재 모델 인스턴스를 그대로 반환한다.
+        """
+        return self
+
+    def _generate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> ChatResult:
+        """LangChain에서 invoke 호출 시 내부적으로 실행되는 메서드"""
+        pipeline, tokenizer = get_kanana_pipeline()
+
+        hf_messages = []
+        for message in messages:
+            if isinstance(message, SystemMessage):
+                hf_messages.append({"role": "system", "content": message.content})
+            elif isinstance(message, HumanMessage):
+                hf_messages.append({"role": "user", "content": message.content})
+            elif isinstance(message, AIMessage):
+                hf_messages.append({"role": "assistant", "content": message.content})
+            else:
+                raise ValueError(f"Unsupported message type: {type(message)}")
+        
+        response = pipeline(
+            hf_messages,
+            max_new_tokens = self.max_new_tokens,
+            temperature = kwargs.get("temperature", 0.0),
+            do_sample = True if kwargs.get("temperature", 0.0) > 0.0 else False,
+            eos_token_id = tokenizer.eos_token_id,
+            return_full_text = False
+        )
+
+        generated_text = ""
+        if response and isinstance(response[0], dict):
+            generated_text = response[0].get("generated_text", "")
+            if isinstance(generated_text, list):
+                generated_text = generated_text[-1].get("content", "")
+
+        message = AIMessage(content = generated_text)
+        generation = ChatGeneration(message = message)
+        return ChatResult(generations = [generation])
+
+    @property
+    def _llm_type(self) -> str:
+        return "kanana-local-chat"
+

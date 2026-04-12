@@ -5,7 +5,6 @@ import operator
 class DebateAgentState(TypedDict):
     """각 토론 에이전트의 상태"""
     ticker : str
-    keywords : List[str]
     context : str 
 
     optimist_initial : str

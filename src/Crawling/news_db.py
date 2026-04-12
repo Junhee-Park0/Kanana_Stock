@@ -24,6 +24,7 @@ chrome_options.add_argument("--remote-debugging-port=9222")
 
 class News_Database:
     def _init_db(self, conn: sqlite3.Connection):
+        """SQLite 테이블/인덱스 생성"""
         cursor = conn.cursor()
         # 테이블 생성
         cursor.execute(
@@ -109,8 +110,6 @@ class News_Database:
         스크래핑된 데이터를 받아 SQLite DB로 생성
         - metadata -> 'metadata' 테이블 생성
         - content -> 'content' 테이블 생성 
-        Returns:
-            bool: 성공 시 True, 실패 시 False
         """
         conn = None
         try:

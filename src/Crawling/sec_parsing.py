@@ -14,6 +14,7 @@ class SEC_Parser:
         self.file_path = Path(file_path)
 
     def parse_filing(self, form : str):
+        """[종합] 문서의 종류(form)에 따라 다른 파싱 방법 적용"""
         if form == "4":
             return self.parse_form_4()
         elif form == "SC 13G":
@@ -24,6 +25,7 @@ class SEC_Parser:
             raise ValueError(f"Unsupported form: {form}")
 
     def _read_content(self) -> str:
+        """여러 인코딩 방법을 통해 파일 읽기"""
         raw = self.file_path.read_bytes()
         for encoding in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
             try:
@@ -33,10 +35,12 @@ class SEC_Parser:
         return raw.decode("utf-8", errors = "ignore")
 
     def _extract_sec_text_block(self, content: str) -> str:
+        """문서의 본문 블록 추출"""
         match = re.search(r"<TEXT>(.*?)</TEXT>", content, flags=re.IGNORECASE | re.DOTALL)
         return match.group(1) if match else content
 
     def _build_soup(self, content: str, parsers):
+        """BeautifulSoup 객체 생성"""
         for parser in parsers:
             try:
                 with warnings.catch_warnings():
@@ -47,6 +51,7 @@ class SEC_Parser:
         raise ValueError("No available parser could parse the document.")
 
     def _to_float(self, value):
+        """문자열/숫자 값 정규화하여 float 반환"""
         if value is None:
             return None
         if isinstance(value, (int, float)):
@@ -67,17 +72,20 @@ class SEC_Parser:
             return None
 
     def _to_bool(self, value) -> bool:
+        """문자열 기반 표현을 bool로 변환"""
         if value is None:
             return False
         normalized = str(value).strip().lower()
         return normalized in {"1", "true", "yes", "y"}
 
     def _tag_local_name(self, tag_name: str) -> str:
+        """태그 이름만 소문자로 반환"""
         if not tag_name:
             return ""
         return tag_name.split(":")[-1].lower()
 
     def _clean_text(self, text: str) -> str:
+        """공백 정리"""
         if text is None:
             return ""
         cleaned = text.replace("\xa0", " ")
@@ -87,6 +95,7 @@ class SEC_Parser:
         return cleaned.strip()
 
     def _find_first_text_by_local_names(self, soup, local_names):
+        """유효한 텍스트 조각 반환"""
         target_names = {name.lower() for name in local_names}
         for tag in soup.find_all(True):
             if self._tag_local_name(tag.name) in target_names:
@@ -96,6 +105,7 @@ class SEC_Parser:
         return None
 
     def _chunk_text(self, text: str, max_chars: int = 3000):
+        """문단 기준으로 청킹 (최대 3000자)"""
         if not text:
             return []
         chunks = []
@@ -128,6 +138,7 @@ class SEC_Parser:
         return chunks
 
     def parse_form_4(self):
+        """Form 4 XML 파일 파싱"""
         xml_content = self._read_content()
         soup = self._build_soup(xml_content, ("lxml-xml", "xml", "html.parser"))
 
@@ -229,6 +240,7 @@ class SEC_Parser:
         return file_path
 
     def parse_sc_13g(self):
+        """SC 13G XML/HTML 파일 파싱"""
         content = self._read_content()
         content = self._extract_sec_text_block(content)
         suffix = self.file_path.suffix.lower()
@@ -408,6 +420,7 @@ class SEC_Parser:
             return self._save_to_json(data)
 
     def parse_general_html(self):
+        """남은 문서들(HTML) 파일 파싱"""
         content = self._read_content()
         content = self._extract_sec_text_block(content)
 
@@ -499,6 +512,7 @@ class SEC_Parser:
         return file_path
 
     def _save_to_json(self, data):
+        """파싱 결과를 딕셔러니로 json 파일에 저장 """
         file_name = self.file_path.stem
         base_path = Path(SEC_FILE_PATH) / self.ticker / "Parsed"
         base_path.mkdir(parents = True, exist_ok = True)

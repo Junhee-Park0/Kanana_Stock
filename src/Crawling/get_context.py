@@ -1,7 +1,11 @@
+"""
+DB에서 뉴스/공시 데이터를 조회하는 클래스 (tool의 기반이 되는 함수)
+"""
+
 import sqlite3
 from pathlib import Path
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict
 
 from config import Config
 

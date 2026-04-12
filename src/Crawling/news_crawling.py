@@ -51,7 +51,7 @@ class News_Crawler:
                 pass
 
     def _create_driver(self, chrome_options, retries: int = 2):
-        """WebDriver 생성 재시도. 실패 시 프로세스를 정리하고 재시도."""
+        """WebDriver 생성 재시도 - 실패 시 프로세스를 정리하고 재시도"""
         last_error = None
         for attempt in range(1, retries + 1):
             try:

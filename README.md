@@ -1,102 +1,102 @@
-# MAS-Briefing: Multi-Agent Investment Briefing System
+# Stock News: Crawling + Multi-Agent Debate
 
-**MAS-Briefing**은 LLM 기반의 멀티 에이전트 시스템을 활용하여 특정 주식 종목에 대한 심층적인 투자 분석과 브리핑을 제공하는 프로젝트입니다. 뉴스 기사와 SEC 공시 데이터를 실시간으로 수집하고, 이를 바탕으로 다각적인 분석(낙관론 vs 비관론 토론)을 수행하여 최종 합의된 투자 의견을 도출합니다.
+뉴스/SEC 데이터를 수집하고, 이를 기반으로 멀티 에이전트 토론(낙관 vs 비관 vs 중재)을 수행해 투자 관점의 최종 합의안을 생성하는 프로젝트입니다.
 
-## 📌 Key Features
+## 주요 기능
 
-### 1. Advanced Data Pipeline
-데이터 수집은 크게 두 가지 경로를 통해 이루어지며, 분석에 필요한 풍부한 Context를 확보합니다.
+- `src/Crawling`: Yahoo Finance 뉴스 + SEC 공시 수집/파싱 및 SQLite 저장
+- `src/Agent`: LangGraph 기반 멀티 에이전트 토론 워크플로우
+- `main.py`: 크롤링 -> 토론을 순차 실행하는 통합 CLI 진입점
+- `api.py`: FastAPI 백엔드 (`crawl`, `debate`, `run-all`, `jobs`)
 
-*   **Yahoo Finance Crawling**:
-    *   `Crawling` 모듈을 통해 Yahoo Finance의 종목별 최신 뉴스를 직접 크롤링합니다.
-    *   수집된 뉴스(제목, 본문, 저자 등)는 로컬 **SQLite DB**(`News_DB`)에 체계적으로 저장되어 관리됩니다.
-*   **AWS & SEC Data Fetching**:
-    *   `Fetch_Data` 모듈을 활용하여 AWS DynamoDB에 적재된 뉴스 데이터와 SEC EDGAR 시스템의 기업 공시(Filings) 데이터를 가져옵니다.
-    *   뉴스뿐만 아니라 공시 데이터까지 통합하여 에이전트가 팩트에 기반한 정교한 분석을 할 수 있도록 지원합니다.
+## 현재 프로젝트 구조
 
-### 2. Multi-Agent Debate (Core)
-수집된 데이터를 바탕으로 서로 다른 페르소나를 가진 에이전트들이 토론을 진행합니다.
-
-*   **낙관론자(Optimist)**: 시장의 기회 요인과 긍정적 지표(호재성 뉴스, 성장 가능성)를 중심으로 분석
-*   **비관론자(Pessimist)**: 잠재적 리스크와 부정적 지표(규제 이슈, 실적 우려)를 중심으로 분석
-*   **중재자(Neutral)**: 양측의 치열한 토론 내용을 종합하여 편향되지 않은 균형 잡힌 최종 합의(Consensus) 도출
-*   **LangGraph Workflow**: `Initial Opinion` → `Debate Loop` (상호 반박) → `Summary` → `Save`의 순차적 흐름을 통해 논리적 완성도를 높입니다.
-
-### 3. Single Agent Briefing
-*   복잡한 토론 과정 없이, 수집된 데이터를 요약하여 투자자를 위한 간결한 일일 브리핑 리포트를 생성하는 기능도 제공합니다.
-
-## 📂 Project Structure
-
-```
-MAS_Project/
-├── crawling_main.py       # [Crawling] Yahoo Finance 뉴스 크롤링 및 DB 저장 실행
-├── single_agent_main.py   # [Single Agent] 브리핑 생성 실행
-├── multi_agent_main.py    # [Multi Agent] 데이터 통합 및 토론 실행
-├── src/
-│   ├── Crawling/          # Yahoo Finance 크롤링 및 SQLite DB 핸들링 로직
-│   ├── Fetch_Data/        # AWS DynamoDB 뉴스 및 SEC 공시 데이터 Fetching 로직
-│   ├── Single_Agent/      # 싱글 에이전트 로직
-│   └── Multi_Agent/       # 멀티 에이전트 토론 로직 (LangGraph)
-│       ├── graph.py       # 에이전트 워크플로우 정의
-│       ├── nodes.py       # 낙관/비관/중재자 노드 정의
-│       └── prompts.yaml   # 각 에이전트의 페르소나 및 프롬프트
-└── data/
-    ├── News_DB/           # 크롤링된 뉴스가 저장되는 SQLite DB
-    ├── SEC/               # 수집된 SEC 공시 데이터
-    ├── Briefings/         # 생성된 브리핑 결과물
-    └── Debate/            # 멀티 에이전트 토론 로그 및 최종 합의문
+```text
+Stock_News/
+├── main.py
+├── api.py
+├── requirements.txt
+├── config.py
+└── src/
+    ├── Crawling/
+    │   ├── crawling_main.py
+    │   ├── news_crawling.py
+    │   ├── news_db.py
+    │   ├── sec_crawling.py
+    │   ├── sec_parsing.py
+    │   ├── sec_db.py
+    │   └── get_context.py
+    └── Agent/
+        ├── agent_main.py
+        ├── graph.py
+        ├── nodes.py
+        ├── functions.py
+        ├── tools.py
+        ├── kanana_pipeline.py
+        ├── prompts.yaml
+        └── states.py
 ```
 
-## 🚀 Getting Started
-
-### 1. Prerequisites
-*   Python 3.8+
-*   OpenAI API Key (GPT-4o 활용)
-
-### 2. Installation
+## 설치
 
 ```bash
-# 프로젝트 클론
-git clone [repository_url]
-
-# 패키지 설치
 pip install -r requirements.txt
 ```
 
-### 3. Configuration
-프로젝트 루트에 `.env` 파일을 생성하고 OpenAI API 키를 설정합니다.
+## 환경 설정
 
-```env
-OPENAI_API_KEY=sk-proj-xxxx...
-```
+`.env`에 실행에 필요한 환경변수를 설정합니다.
 
-## 💻 Usage
+- 로컬 Kanana 모델 경로/옵션은 `config.py`를 기준으로 사용합니다.
+- SEC 크롤링을 위한 User-Agent/이메일 설정이 필요할 수 있습니다.
 
-### 1. Data Collection (Crawling)
-Yahoo Finance에서 최신 뉴스를 크롤링하여 로컬 DB에 저장합니다.
+## CLI 실행 방법
+
+### 1) 크롤링 + 토론 통합 실행
+
 ```bash
-# 사용법: python crawling_main.py [TICKER] [COUNT]
-python crawling_main.py "NVDA" 5
+python -m main --ticker NVDA
 ```
 
-### 2. Multi-Agent Debate (토론 및 합의)
-저장된 뉴스 데이터와 SEC 데이터를 통합(`Fetch_Data`)하여 토론을 진행합니다.
+### 2) 크롤링만 실행
+
 ```bash
-# 사용법: python multi_agent_main.py --ticker [TICKER] --keywords [KEYWORDS...]
-python multi_agent_main.py --ticker NVDA --keywords "AI" "Data Center" "H100"
+python -m src.Crawling.crawling_main --ticker NVDA
 ```
-*   **Process**: 데이터 수집/통합 -> 낙관/비관 초기 의견 -> 상호 반박 -> 최종 합의
-*   **Output**: `data/Debate/` 폴더에 결과 저장
 
-### 3. Single Agent Briefing
-(Optional) 단일 에이전트가 작성한 브리핑을 생성합니다.
+### 3) 에이전트 토론만 실행
+
 ```bash
-python single_agent_main.py --ticker NVDA
+python -m src.Agent.agent_main --ticker NVDA
 ```
 
-## 🛠 Tech Stack
-*   **Language**: Python
-*   **Framework**: LangChain, LangGraph
-*   **LLM**: OpenAI GPT-4o
-*   **Data Source**: Yahoo Finance (Crawling), AWS DynamoDB, SEC EDGAR
-*   **Database**: SQLite
+## FastAPI 백엔드
+
+서버 실행:
+
+```bash
+uvicorn api:app --reload --host 0.0.0.0 --port 8000
+```
+
+주요 엔드포인트:
+
+- `GET /health`: 헬스체크
+- `POST /crawl`: 크롤링만 실행
+- `POST /debate`: 토론만 실행, `final_consensus` 반환
+- `POST /run-all`: 크롤링+토론 통합 실행 (`sync`/`background`)
+- `GET /jobs/{job_id}`: 백그라운드 작업 상태 조회
+
+요청 예시:
+
+```json
+{
+  "ticker": "NVDA",
+  "mode": "background"
+}
+```
+
+## 주의사항
+
+- 에이전트는 로컬 모델 추론 환경(CPU/GPU, 메모리)에 따라 응답 시간이 크게 달라질 수 있습니다.
+- 크롤링은 대상 사이트 구조 변경 또는 드라이버 이슈에 영향을 받을 수 있습니다.
+- `python src/Agent/agent_main.py ...` 형태보다 `python -m src.Agent.agent_main ...` 방식 실행을 권장합니다.
