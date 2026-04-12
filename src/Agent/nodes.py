@@ -9,7 +9,7 @@ from config import Config
 from dotenv import load_dotenv
 load_dotenv(".env")
 
-from src.Agent.kanana_pipeline import ChatKanana
+from src.Agent.kanana_pipeline import ChatKanana, get_kanana_pipeline
 from src.Agent.states import DebateAgentState
 from src.Agent.functions import load_prompt, create_agent
 from src.Agent.tools import search_recent_news, search_recent_filings, read_news_content, read_parsed_filing
@@ -33,9 +33,11 @@ def optimistic_initial_node(state : DebateAgentState):
     """
     # 에이전트 실행
     response = agent_executor.invoke({
+        "ticker": state["ticker"],
         "input": input_message,
         "chat_history": []
     })
+    print(f"[낙관론자] tool calls: {len(response.get('tool_calls', []))}")
     # 결과
     print(f"낙관론자: {response['output']}")
     return {
@@ -60,9 +62,11 @@ def pessimistic_initial_node(state : DebateAgentState):
     """
     # 에이전트 실행
     response = agent_executor.invoke({
+        "ticker": state["ticker"],
         "input": input_message,
         "chat_history": []
     })
+    print(f"[비관론자] tool calls: {len(response.get('tool_calls', []))}")
     # 결과
     print(f"비관론자: {response['output']}")
     return {
@@ -95,9 +99,11 @@ def optimistic_debate_node(state : DebateAgentState):
     )
     # 에이전트 실행
     response = agent_executor.invoke({
+        "ticker": state["ticker"],
         "input": input_message,
         "chat_history": []
     })
+    print(f"[낙관론자 Turn {turn}] tool calls: {len(response.get('tool_calls', []))}")
     # 결과
     content = response["output"]
     print(f"낙관론자: {content}")
@@ -134,9 +140,11 @@ def pessimistic_debate_node(state : DebateAgentState):
     )
     # 에이전트 실행
     response = agent_executor.invoke({
+        "ticker": state["ticker"],
         "input": input_message,
         "chat_history": []
     })
+    print(f"[비관론자 Turn {turn}] tool calls: {len(response.get('tool_calls', []))}")
     # 결과
     content = response["output"]
     print(f"비관론자: {content}")
@@ -187,14 +195,14 @@ def save_debate_node(state : DebateAgentState):
     print("\n[System] 결과 저장 중...")
     ticker = state["ticker"]
     # 전체 기록 구성
-    datetime = datetime.now().strftime("%Y%m%d")
-    debate_path = Path(f"{Config.DEBATE_HISTORY_PATH}/{ticker}/{datetime}")
+    date_str = datetime.now().strftime("%Y%m%d%H%M%S")
+    debate_path = Path(f"{Config.DEBATE_HISTORY_PATH}/{ticker}/{date_str}")
     if not debate_path.exists():
         debate_path.mkdir(parents = True, exist_ok = True)
     # 전체 기록 구성
     full_report = [
         f"=== {ticker} Multi-Agent Debate Report ===",
-        f"Date: {datetime}",
+        f"Date: {date_str}",
         "\n[1. Optimist Initial Opinion]", state.get("optimist_initial", ""),
         "\n[2. Pessimist Initial Opinion]", state.get("pessimist_initial", ""),
         "\n[3. Debate History]", "\n".join(state.get("debate_history", [])),

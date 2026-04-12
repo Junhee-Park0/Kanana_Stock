@@ -23,14 +23,14 @@ class Config:
     # 경로 설정
     # ============================================================================
     LOG_DIR = "./logs"
-    KANANA_MODEL_PATH = "E:/Kanana_Model"
+    KANANA_MODEL_PATH = "./Kanana_Model"
 
     NEWS_FILE_PATH = "./data/News"
     NEWS_DB_PATH = "./database/News"
     SEC_FILE_PATH = "./data/SEC"
     SEC_DB_PATH = "./database/SEC"
 
-    MAX_NEWS_COUNT = 10 # 수집할 뉴스 최대 개수
+    MAX_NEWS_COUNT = 20 # 수집할 뉴스 최대 개수
     MAX_SEC_DAYS = 14 # 수집할 SEC 일수
 
     DEBATE_HISTORY_PATH = "./debate"

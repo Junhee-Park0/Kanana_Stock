@@ -16,11 +16,11 @@ class SEC_Parser:
     def parse_filing(self, form : str):
         """[종합] 문서의 종류(form)에 따라 다른 파싱 방법 적용"""
         if form == "4":
-            return self.parse_form_4()
+            return self.parse_form_4(form)
         elif form == "SC 13G":
-            return self.parse_sc_13g()
+            return self.parse_sc_13g(form)
         elif form in ["10-Q", "10-K", "8-K", "DEF 14A"]:
-            return self.parse_general_html()
+            return self.parse_general_html(form)
         else:
             raise ValueError(f"Unsupported form: {form}")
 
@@ -137,7 +137,7 @@ class SEC_Parser:
 
         return chunks
 
-    def parse_form_4(self):
+    def parse_form_4(self, form: str):
         """Form 4 XML 파일 파싱"""
         xml_content = self._read_content()
         soup = self._build_soup(xml_content, ("lxml-xml", "xml", "html.parser"))
@@ -185,7 +185,7 @@ class SEC_Parser:
         owner_relationship = find_ci(owner, "reportingOwnerRelationship") if owner else None
 
         data = {
-            "document_type": "4",
+            "document_type": form,
             "period_of_report": get_text(soup, "periodOfReport"), # 보고 기준일
             "company_name": get_text(issuer, "issuerName"),
             "ticker": get_text(issuer, "issuerTradingSymbol"),
@@ -239,7 +239,7 @@ class SEC_Parser:
         file_path = self._save_to_json(data)
         return file_path
 
-    def parse_sc_13g(self):
+    def parse_sc_13g(self, form: str):
         """SC 13G XML/HTML 파일 파싱"""
         content = self._read_content()
         content = self._extract_sec_text_block(content)
@@ -269,7 +269,7 @@ class SEC_Parser:
             ownership = find_ci(soup, "ownership") or find_ci(soup, "holding")
 
             data = {
-                "document_type": "SC 13G (XML)",
+                "document_type": form,
                 "company_name": get_val(issuer, "issuerName"),
                 "ticker": get_val(issuer, "issuerTradingSymbol"),
                 "reporter_name": get_val(owner, "rptOwnerName"),
@@ -407,7 +407,7 @@ class SEC_Parser:
             is_amendment = is_amendment or bool(amendment_no_match and amendment_no_match.group(1))
 
             data = {
-                "document_type": "SC 13G (HTML)",
+                "document_type": form,
                 "company_name": find_value_before("(NAME OF ISSUER)"),
                 "cusip": find_value_before("(CUSIP NUMBER)"),
                 "event_date": find_value_before("(DATE OF EVENT WHICH REQUIRES FILING OF THIS STATEMENT)"),
@@ -419,7 +419,7 @@ class SEC_Parser:
             }
             return self._save_to_json(data)
 
-    def parse_general_html(self):
+    def parse_general_html(self, form: str):
         """남은 문서들(HTML) 파일 파싱"""
         content = self._read_content()
         content = self._extract_sec_text_block(content)
@@ -470,7 +470,7 @@ class SEC_Parser:
 
             text_chunks = self._chunk_text(combined_text)
             data = {
-                "document_type": self._find_first_text_by_local_names(soup, ["documenttype"]) or "XBRL",
+                "document_type": form,
                 "company_name": self._find_first_text_by_local_names(soup, ["entityregistrantname"]),
                 "ticker": self._find_first_text_by_local_names(soup, ["tradingsymbol"]),
                 "period_end_date": self._find_first_text_by_local_names(soup, ["documentperiodenddate"]),
@@ -499,7 +499,7 @@ class SEC_Parser:
 
             text_chunks = self._chunk_text(text)
             data = {
-                "document_type": "GENERAL_HTML",
+                "document_type": form,
                 "company_name": None,
                 "ticker": None,
                 "period_end_date": None,

@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 import json
 from typing import List, Dict
+from datetime import datetime, timedelta
 
 from config import Config
 
@@ -19,12 +20,27 @@ MAX_SEC_DAYS = Config.MAX_SEC_DAYS
 
 class GetContext:
     def __init__(self, news_db_path : str = NEWS_DB_PATH, sec_db_path : str = SEC_DB_PATH):
-        self.news_db_path = news_db_path
-        self.sec_db_path = sec_db_path
+        self.news_db_path = Path(news_db_path)
+        self.sec_db_path = Path(sec_db_path)
+
+    def _resolve_ticker_db_path(self, base_path: Path, ticker: str) -> Path:
+        """
+        티커별 DB 파일 경로를 반환.
+        기존 저장 규칙(/database/.../<TICKER>)을 우선 사용하고,
+        없으면 .db 확장자 파일도 허용합니다.
+        """
+        ticker = ticker.upper()
+        direct_path = base_path / ticker
+        if direct_path.exists():
+            return direct_path
+
+        db_path = base_path / f"{ticker}.db"
+        return db_path
 
     def _run_query(self, db_path : str, query : str, params : tuple) -> List[Dict]:
         try:
-            with sqlite3.connect(db_path) as conn:
+            with sqlite3.connect(str(db_path)) as conn:
+                conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 cursor.execute(query, params)
                 return [dict(row) for row in cursor.fetchall()]
@@ -33,7 +49,10 @@ class GetContext:
             return []
 
     def get_recent_news(self, ticker : str, limit : int = MAX_NEWS_COUNT) -> List[Dict]:
-        """최신 뉴스 목록 조회 (사용자가 설정한 개수만큼)"""
+        """최신 뉴스 목록 조회 (항상 최신 10개)"""
+        del limit
+        limit = 10
+        db_path = self._resolve_ticker_db_path(self.news_db_path, ticker)
         query = """
             SELECT article_id, html, title, editor, date
             FROM Articles
@@ -41,17 +60,23 @@ class GetContext:
             ORDER BY date DESC
             LIMIT ?
         """
-        return self._run_query(self.news_db_path, query, (ticker, limit))
+        return self._run_query(db_path, query, (ticker.upper(), limit))
 
     def get_recent_filings(self, ticker : str, days : int = MAX_SEC_DAYS) -> List[Dict]:
-        """최신 SEC 공시 목록 조회 (사용자가 설정한 일수만큼)"""
+        """SEC 공시 목록 조회 (최근 일수 공시 OR 10-K/10-Q/8-K)"""
+        db_path = self._resolve_ticker_db_path(self.sec_db_path, ticker)
+        since_date = (datetime.now() - timedelta(days = days)).strftime("%Y-%m-%d")
         query = """
-            SELECT filling_id, parsed_path, file_name, form, filed_date
+            SELECT filing_id, parsed_path, file_name, form, filed_date
             FROM Filings
-            WHERE ticker = ? AND form IN ('10-K', '10-Q', '8-K') AND filed_date >= ?
+            WHERE ticker = ?
+              AND (
+                    filed_date >= ?
+                    OR form IN ('10-K', '10-Q', '8-K')
+                  )
             ORDER BY filed_date DESC
         """
-        return self._run_query(self.sec_db_path, query, (ticker, days))
+        return self._run_query(db_path, query, (ticker.upper(), since_date))
 
 
     def read_news_content(self, article_id : str) -> str:
@@ -62,7 +87,17 @@ class GetContext:
             WHERE article_id = ?
             ORDER BY block_order ASC
         """
-        blocks = self._run_query(self.news_db_path, query, (article_id,))
+        blocks: List[Dict] = []
+
+        # 티커 정보 없이 article_id만 받으므로, 뉴스 DB 디렉토리 내 파일을 순회하며 조회
+        if self.news_db_path.exists():
+            for db_file in self.news_db_path.iterdir():
+                if not db_file.is_file():
+                    continue
+                blocks = self._run_query(db_file, query, (article_id,))
+                if blocks:
+                    break
+
         if not blocks:
             return "본문 내용을 찾을 수 없습니다."
         

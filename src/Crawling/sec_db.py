@@ -55,11 +55,10 @@ class SEC_Database:
         with open(parsed_path, "r", encoding = "utf-8") as f:
             data = json.load(f)
 
-        if not isinstance(data, dict):
-            data = {"form": "UNKNOWN", "raw": data}
-
+        document_type = data.get("document_type", "UNKNOWN")
         metadata = {
-            "form": data.get("form", "UNKNOWN"),
+            "document_type": document_type,
+            "form": document_type,
             "reporter_name": data.get("reporter_name"),
             "ticker": data.get("ticker"),
             "filed_date": data.get("period_of_report") or data.get("event_date") or data.get("period_end_date"),

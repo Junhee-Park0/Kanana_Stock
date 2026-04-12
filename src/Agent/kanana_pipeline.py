@@ -8,6 +8,7 @@ import time
 # Config 및 Logger 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from config import Config
+KANANA_MAX_NEW_TOKENS = Config.KANANA_MAX_NEW_TOKENS
 from utils.logger import logger, log_agent_action
 
 _pipeline = None
@@ -31,7 +32,7 @@ def get_kanana_pipeline():
         model = AutoModelForCausalLM.from_pretrained(
             model_path,
             device_map = "auto",
-            torch_dtype = torch.float32
+            torch_dtype = torch.float16
         )
         print(f"   ✓ 로컬 모델 로드 완료 ({time.time() - model_start:.1f}초)")
         
@@ -59,7 +60,6 @@ def get_kanana_pipeline():
             _ = _pipeline(
                 warmup_messages,
                 max_new_tokens = 10,
-                temperature = None,
                 do_sample = False,
                 return_full_text = False,
                 eos_token_id = _tokenizer.eos_token_id
@@ -70,7 +70,7 @@ def get_kanana_pipeline():
 
     return _pipeline, _tokenizer
 
-def call_kanana(system_prompt: str, user_input: dict, max_new_tokens: int = 512) -> str:
+def call_kanana(system_prompt: str, user_input: dict, max_new_tokens: int = KANANA_MAX_NEW_TOKENS) -> str:
     """
     Kanana 모델을 직접 호출하는 함수
     """
@@ -97,7 +97,6 @@ def call_kanana(system_prompt: str, user_input: dict, max_new_tokens: int = 512)
         response = pipeline(
             messages,
             max_new_tokens = max_new_tokens,
-            temperature = None,
             do_sample = False,
             return_full_text = False,
             eos_token_id = tokenizer.eos_token_id
@@ -187,7 +186,7 @@ def _extract_first_json(text: str) -> str:
     return text[start:].strip()
 
 
-def call_kanana_structured(system_prompt: str, user_input: dict, output_schema: type, max_new_tokens: int = 512) -> Any:
+def call_kanana_structured(system_prompt: str, user_input: dict, output_schema: type, max_new_tokens: int = KANANA_MAX_NEW_TOKENS) -> Any:
     """
     Kanana 모델의 output 형태를 한정(JSON)하여 호출하는 함수
     """
@@ -256,7 +255,7 @@ from pydantic import Field
 class ChatKanana(BaseChatModel):
     """LangChain 에이전트와 호환되는 Kanana 커스텀 채팅 모델 클래스"""
     model_name : str = "Kanana-Local"
-    max_new_tokens : int = 512
+    max_new_tokens : int = KANANA_MAX_NEW_TOKENS
 
     def bind_tools(self, tools, **kwargs):
         """
@@ -281,13 +280,21 @@ class ChatKanana(BaseChatModel):
             else:
                 raise ValueError(f"Unsupported message type: {type(message)}")
         
+        temperature = kwargs.get("temperature")
+        do_sample = isinstance(temperature, (int, float)) and temperature > 0
+
+        generation_kwargs = {
+            "max_new_tokens": self.max_new_tokens,
+            "do_sample": do_sample,
+            "eos_token_id": tokenizer.eos_token_id,
+            "return_full_text": False,
+        }
+        if do_sample:
+            generation_kwargs["temperature"] = float(temperature)
+
         response = pipeline(
             hf_messages,
-            max_new_tokens = self.max_new_tokens,
-            temperature = kwargs.get("temperature", 0.0),
-            do_sample = True if kwargs.get("temperature", 0.0) > 0.0 else False,
-            eos_token_id = tokenizer.eos_token_id,
-            return_full_text = False
+            **generation_kwargs
         )
 
         generated_text = ""

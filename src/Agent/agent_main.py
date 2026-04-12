@@ -1,8 +1,12 @@
 from src.Agent.graph import agent_debate_graph
+from src.Agent.kanana_pipeline import get_kanana_pipeline
 import argparse
 import traceback
 
 def main(ticker : str):
+    # 모델 초기화 로그를 먼저 보여주기 위해 배너 출력 전에 선로딩
+    get_kanana_pipeline()
+
     print(f"{'='*60}")
     print(f"🔍 [Multi Agent] {ticker} 분석 시작")
     print(f"{'='*60}")
@@ -15,7 +19,7 @@ def main(ticker : str):
         "pessimist_initial" : "",
         "debate_history" : [],
         "turn_count" : 0,
-        "max_turns" : 6,
+        "max_turns" : 4,
         "current_agent" : "start",
         "final_consensus" : None
     }
