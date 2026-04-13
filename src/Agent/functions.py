@@ -3,8 +3,8 @@ import yaml
 import json
 
 from src.Agent.states import DebateAgentState
-from src.Agent.kanana_pipeline import call_kanana, _extract_first_json_object, _extract_output_only
-from src.Agent.schemas import EvidenceItem, InitialOutput
+from src.Agent.kanana_pipeline import call_kanana, _extract_first_json, _extract_output_only
+from src.Agent.schemas import EvidenceItem, InitialOutput, DebateOutput
 from utils.logger import log_tool_call
 
 from config import Config
@@ -15,6 +15,7 @@ KANANA_MAX_NEW_TOKENS = Config.KANANA_MAX_NEW_TOKENS
 def load_prompt(prompt_name: str, **kwargs) -> str:
     """
     prompts.yaml에서 프롬프트를 로드하여, 문자열로 반환합니다.
+    (**kwargs : 프롬프트에서 비어있는 부분(ex. ticker, history 등)을 채워주기 위함)
     """
     with open(f"src/Agent/prompts.yaml", "r", encoding = "utf-8") as f:
         prompts = yaml.safe_load(f)
@@ -35,23 +36,22 @@ def load_prompt(prompt_name: str, **kwargs) -> str:
             f"Prompt '{prompt_name}' requires variable '{missing_key}' but it was not provided."
         ) from e
 
-def create_agent(tools, system_prompt):
-    """Kanana용 수동 Tool-Calling (직접 llm을 불러와 Tool과 연결)"""
+def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] = "initial"):
+    """
+    Kanana용 수동 Tool-Calling (직접 llm을 불러와 Tool과 연결)
+    agent_role에 따라 InitialOutput 또는 DebateOutput 반환
+    """
     tool_map = {tool.name: tool for tool in tools} # 각 노드에서 건네줌
 
     class _AgentExecutor:
-        def invoke(self, payload): # payload : {ticker: str, input: str, chat_history: list}
+        def invoke(self, payload): # payload : {ticker: str, input: str, chat_history: list, opponent_text: str}
             input_text = str(payload.get("input", "")).strip()
             chat_history = payload.get("chat_history", [])
-            history_lines = []
-            for item in chat_history:
-                if isinstance(item, dict):
-                    role = str(item.get("role", "unknown"))
-                    content = str(item.get("content", ""))
-                    history_lines.append(f"[{role}] {content}")
-                else:
-                    history_lines.append(str(item))
-            history_text = "\n".join(history_lines) if history_lines else "(없음)"
+            ticker = str(payload.get("ticker", "")).strip().upper()
+            if agent_role == "debate":
+                opponent_text = str(payload.get("opponent_text", "")).strip() 
+            else:
+                opponent_text = ""
 
             tool_specs = "\n".join(
                 f"- {name}: {getattr(tool, 'description', '').strip()}"
@@ -171,39 +171,76 @@ def create_agent(tools, system_prompt):
                                 f"[Step 0] Tool `read_parsed_filing` failed: {type(e).__name__}: {e}"
                             )
 
+            # 출력 스키마 설정 (예시) - 모델은 evidence 형식을 여기서 확인
+            if agent_role == "initial":
+                schema_json = "{'action': 'final', 'output': '분석 결과', 'evidence': [{{'source': 'news 또는 filing', 'source_id': 'ID', 'summary': '요약'}}]}"
+            else:
+                schema_json = "{'action': 'final', 'output': '상대 의견 반박 내용', 'opponent_text': '상대방 의견 요약', 'evidence': [{{'source': 'news 또는 filing', 'source_id': 'ID', 'summary': '핵심 사실 한 줄'}}]}"
+
             # 매 step마다 Tool Call 결과 기록, 프롬프트에 주입
             for step in range(1, max_steps + 1): 
                 scratch_text = "\n".join(scratchpad) if scratchpad else "(없음)" # Tool Call 중간 작업 기록
+                
+                # 매번 기존 프롬프트에 더해서 넣어주는 내용
                 iteration_prompt = (
                     f"{system_prompt}\n\n"
-                    "[도구 사용 규칙]\n"
-                    "반드시 아래 JSON 중 하나만 출력하세요.\n"
-                    "1) 도구 호출:\n"
-                    '{"action": "tool", "tool_name": "<tool_name>", "args": {"key":"value"}}\n'
-                    "2) 최종 답변:\n"
-                    '{"action": "final", "output": "최종 분석 텍스트", "evidence": [{"source": "news", "source_id": "기사ID", "summary": "핵심 사실 한 줄"}, {"source": "filing", "source_id": "공시ID", "summary": "핵심 사실 한 줄"}]}\n\n'
-                    "설명 문장, 코드블록, 마크다운 없이 JSON 객체 하나만 출력하세요.\n\n"
-                    f"[사용 가능한 도구]\n{tool_specs}\n\n"
-                    f"[이전 대화]\n{history_text}\n\n"
-                    f"[사용자 요청]\n{input_text}\n\n"
-                    f"[중간 작업 기록]\n{scratch_text}\n"
-                )
-                model_text = call_kanana(iteration_prompt, {}, max_new_tokens = KANANA_MAX_NEW_TOKENS).strip()
-                decision = _extract_first_json_object(model_text)
+                    "### 필수 출력 규칙 ###\n"
+                    "오직 하나의 유효한 JSON 객체만을 출력해야 합니다. 서론, 부연 설명, 마크다운 코드는 절대 금지합니다.\n\n"
 
+                    "원하는 방향에 따라 아래 두 가지 행동 중 한 가지를 선택하세요.\n"
+                    "1) 추가 정보가 필요할 때 (도구 호출):\n"
+                    '{"action": "tool", "tool_name": "도구 이름", "args": {"key": "value"}}\n'
+                    "2) 최종 분석이 완료되었을 때 (최종 답변 생성):\n"
+                    f"{schema_json}\n\n"
+
+                    "### 참고 정보 ###\n"
+                    f"- 사용 가능한 도구:\n{tool_specs}\n\n"
+                    f"- 상대방의 의견:\n{opponent_text}\n\n"
+                    f"- 현재까지의 조사 기록:\n{scratch_text}\n"
+
+                    "### 현재 작업 ###\n"
+                    "조사 기록을 바탕으로 다음 행동(tool 또는 final)을 결정하여 JSON으로만 응답하세요."
+                )
+                
+                model_text = call_kanana(iteration_prompt, {}, max_new_tokens = KANANA_MAX_NEW_TOKENS).strip()
+                decision = _extract_first_json(model_text)
+
+                # json 파싱 실패 시
                 if not decision:
-                    final_output = model_text
-                    break
+                    decision = {"action": "final", "output": model_text}
 
                 action = str(decision.get("action", "")).lower().strip()
+
                 if action == "final":
-                    if len(tool_calls) == 0:
-                        scratchpad.append(
-                            f"[Step {step}] 최종 답변이 조기에 생성되어 도구 호출을 재시도합니다."
-                        )
-                        continue
+                    # output 부분만 추출하기
                     final_output = _extract_output_only(str(decision.get("output", "")))
+                    # evidence 처리
                     raw_evidence = decision.get("evidence", [])
+                    evidence_items = []
+                    if isinstance(raw_evidence, list):
+                        for evidence in raw_evidence:
+                            try:
+                                evidence_items.append(EvidenceItem(**evidence))
+                            except: 
+                                continue
+                    # 역할별 evidence 출력값 할당
+                    if agent_role == "initial":
+                        return InitialOutput(
+                            text = final_output,
+                            evidence = evidence_items,
+                            tool_calls = tool_calls # 말 안 들으면 빼버리자.. 
+                        )
+                    
+                    elif agent_role == "debate":
+                        # 만약 상대의 발언을 요약했다면.. 
+                        summarized_opponent = str(decision.get("opponent_text", opponent_text)).strip()
+
+                        return DebateOutput(
+                            text = final_output,
+                            opponent_text = summarized_opponent, # 말 안 들으면 빼버리자.. 
+                            evidence = evidence_items,
+                            tool_calls = tool_calls # 말 안 들으면 빼버리자.. 
+                        )
                     break
 
                 if action != "tool":
@@ -239,7 +276,7 @@ def create_agent(tools, system_prompt):
                         result_count = result_count
                     )
                     scratchpad.append(
-                        f"[Step {step}] Tool `{tool_name}` args={json.dumps(args, ensure_ascii = False)}\n"
+                        f"[Step {step}] Tool `{tool_name}` args = {json.dumps(args, ensure_ascii = False)}\n"
                         f"Result: {tool_result_text}"
                     )
                 except Exception as e:
@@ -256,23 +293,26 @@ def create_agent(tools, system_prompt):
 
             evidence_items = []
             if isinstance(raw_evidence, list):
-                for item in raw_evidence:
+                for evidence in raw_evidence:
                     try:
-                        evidence_items.append(EvidenceItem(
-                            ticker = ticker,
-                            source = item.get("source"),
-                            source_id = str(item.get("source_id", "")),
-                            summary = str(item.get("summary", "")),
-                        ))
+                        evidence_items.append(EvidenceItem(**evidence))
                     except Exception:
                         pass
 
-            return InitialOutput(
-                ticker = ticker,
+            if agent_role == "initial":
+                return InitialOutput(
                 text = final_output,
-                evidence = evidence_items,
-                tool_calls = tool_calls,
-            )
+                    evidence = evidence_items,
+                    tool_calls = tool_calls
+                )
+
+            elif agent_role == "debate":
+                return DebateOutput(
+                    text = final_output,
+                    opponent_text = opponent_text,
+                    evidence = evidence_items,
+                    tool_calls = tool_calls
+                )
 
     return _AgentExecutor()
 

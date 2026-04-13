@@ -1,6 +1,7 @@
 from typing import List, Dict, Any, TypedDict, Optional
 from typing import Annotated
 import operator
+from src.Agent.schemas import EvidenceItem
 
 class DebateAgentState(TypedDict):
     """각 토론 에이전트의 상태"""
@@ -9,6 +10,10 @@ class DebateAgentState(TypedDict):
 
     optimist_initial : str
     pessimist_initial : str
+
+    optimist_evidence : List[EvidenceItem]
+    pessimist_evidence : List[EvidenceItem]
+    tool_calls : List[Dict[str, Any]]
 
     debate_history : Annotated[List[str], operator.add]
 

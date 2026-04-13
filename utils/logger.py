@@ -71,12 +71,3 @@ def log_tool_call(step: int, tool_name: str, args: dict, result_count = None):
     if result_count is not None:
         message += f" result_count = {result_count}"
     logger.info(message)
-
-def log_json_parse_warning(context: str, raw_text: str, fallback_used: str = ""):
-    """JSON 파싱 실패 경고 로그 기록"""
-    preview = raw_text[:400] + "..." if len(raw_text) > 400 else raw_text
-    message = f"[JSON_WARN] context = {context}"
-    if fallback_used:
-        message += f" fallback_used = {fallback_used}"
-    message += f"\n  └─ raw_preview: {preview}"
-    logger.warning(message)

@@ -24,7 +24,7 @@ class Config:
     # 경로 설정
     # ============================================================================
     LOG_DIR = "./logs"
-    KANANA_MODEL_PATH = "./Kanana_Model"
+    KANANA_MODEL_PATH = "E:\Kanana_Model"
 
     NEWS_FILE_PATH = "./data/News"
     NEWS_DB_PATH = "./database/News"

@@ -25,6 +25,8 @@ class DebateOutput(BaseModel):
     """에이전트 토론 중 의견 출력 형식"""
     text: str = Field(..., description = "토론 중 의견 텍스트")
     opponent_text: str = Field(..., description = "상대방 의견 요약")
+    evidence: List[EvidenceItem] = Field(..., description = "토론 중 의견 근거 리스트")
+    tool_calls: List[Dict[str, Any]] = Field(..., description = "도구 호출 기록 리스트")
 
 class ConsensusOutput(BaseModel):
     """중재자 에이전트 최종 결론 출력 형식"""
