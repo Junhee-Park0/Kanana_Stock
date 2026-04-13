@@ -24,7 +24,7 @@ def main(ticker: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="크롤링과 멀티 에이전트 토론을 순차 실행하는 통합 메인"
+        description = "크롤링과 멀티 에이전트 토론을 순차 실행하는 통합 메인"
     )
     parser.add_argument("--ticker", type=str, required=True, help="기업 티커 (예: NVDA)")
     args = parser.parse_args()

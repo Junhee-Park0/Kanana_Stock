@@ -1,6 +1,5 @@
 import os
-from langgraph.graph import StateGraph, END, START
-from langchain_core.messages import SystemMessage, HumanMessage
+from utils.logger import log_json_parse_warning
 
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +10,8 @@ load_dotenv(".env")
 
 from src.Agent.kanana_pipeline import ChatKanana, get_kanana_pipeline
 from src.Agent.states import DebateAgentState
-from src.Agent.functions import load_prompt, create_agent
+from src.Agent.functions import load_prompt, create_agent, _extract_first_json_object
+from src.Agent.schemas import EvidenceItem, DebateOutput, ConsensusOutput
 from src.Agent.tools import search_recent_news, search_recent_filings, read_news_content, read_parsed_filing
 
 
@@ -20,28 +20,25 @@ def optimistic_initial_node(state : DebateAgentState):
     낙관론자 에이전트: 긍정적인 관점에서 시장을 분석하고 의견을 제시합니다.
     """
     print(f"\n[낙관론자] 초기 의견 도출 중...")
-    llm = ChatKanana()
     tools = [search_recent_news, search_recent_filings, read_news_content, read_parsed_filing]
     # 프롬프트 로드
     system_prompt = load_prompt("optimist_prompt")
-    # 에이전트 실행기 생성
-    agent_executor = create_agent(llm, tools, system_prompt)
+    # 에이전트 실행기 생성 (Tool-Calling 지원 o)
+    agent_executor = create_agent(tools, system_prompt)
     # 입력 메시지 구성
     input_message = f"""
     현재 {state['ticker']} 종목에 대한 낙관적 분석 의견을 제시해줘. 
     반드시 제공된 도구를 사용해서 최신 수치와 기사 내용을 근거로 들어야 해.
     """
-    # 에이전트 실행
+    # 에이전트 실행 -> 여기가 payload
     response = agent_executor.invoke({
         "ticker": state["ticker"],
         "input": input_message,
         "chat_history": []
     })
-    print(f"[낙관론자] tool calls: {len(response.get('tool_calls', []))}")
-    # 결과
-    print(f"낙관론자: {response['output']}")
+    print(response.text)
     return {
-        "optimist_initial" : response["output"]
+        "optimist_initial" : response.text
     }
 
 def pessimistic_initial_node(state : DebateAgentState):
@@ -49,12 +46,11 @@ def pessimistic_initial_node(state : DebateAgentState):
     비관론자 에이전트: 부정적인 관점에서 시장을 분석하고 의견을 제시합니다.
     """
     print(f"\n[비관론자] 초기 의견 도출 중...")
-    llm = ChatKanana()
     tools = [search_recent_news, search_recent_filings, read_news_content, read_parsed_filing]
     # 프롬프트 로드
     system_prompt = load_prompt("pessimist_prompt")
-    # 에이전트 실행기 생성
-    agent_executor = create_agent(llm, tools, system_prompt)
+    # 에이전트 실행기 생성 (Tool-Calling 지원 o)
+    agent_executor = create_agent(tools, system_prompt)
     # 입력 메시지 구성
     input_message = f"""
     현재 {state['ticker']} 종목에 대한 비관적 분석 의견을 제시해줘. 
@@ -66,11 +62,9 @@ def pessimistic_initial_node(state : DebateAgentState):
         "input": input_message,
         "chat_history": []
     })
-    print(f"[비관론자] tool calls: {len(response.get('tool_calls', []))}")
-    # 결과
-    print(f"비관론자: {response['output']}")
+    print(response.text)
     return {
-        "pessimist_initial" : response["output"]
+        "pessimist_initial" : response.text
     }
 
 def optimistic_debate_node(state : DebateAgentState):
@@ -79,12 +73,11 @@ def optimistic_debate_node(state : DebateAgentState):
     """
     turn = state.get("turn_count", 0) 
     print(f"\n[낙관론자 (Turn: {turn})] ------------------")  
-    llm = ChatKanana()
     tools = [search_recent_news, search_recent_filings, read_news_content, read_parsed_filing]
     # 프롬프트 로드
     system_prompt = load_prompt("optimist_debate_prompt")
-    # 에이전트 실행기 생성
-    agent_executor = create_agent(llm, tools, system_prompt)
+    # 에이전트 실행기 생성 (Tool-Calling 지원 o)
+    agent_executor = create_agent(tools, system_prompt)
     # 토론 맥락 구성
     opponent_initial = state.get("pessimist_initial", "아직 의견이 없습니다.")
     history_list = state.get("debate_history", [])
@@ -103,13 +96,16 @@ def optimistic_debate_node(state : DebateAgentState):
         "input": input_message,
         "chat_history": []
     })
-    print(f"[낙관론자 Turn {turn}] tool calls: {len(response.get('tool_calls', []))}")
+    print(f"[낙관론자 Turn {turn}] tool calls: {len(response.tool_calls)}")
     # 결과
-    content = response["output"]
-    print(f"낙관론자: {content}")
-    
+    debate_output = DebateOutput(
+        ticker = state["ticker"],
+        text = response.text,
+        opponent_text = opponent_initial,
+    )
+    print(debate_output.text)
     return {
-        "debate_history" : [f"낙관론자(Turn {turn}): {content}"],
+        "debate_history" : [f"낙관론자(Turn {turn}): {debate_output.text}"],
         "turn_count": turn + 1,
         "current_agent": "optimist"
     }
@@ -120,12 +116,11 @@ def pessimistic_debate_node(state : DebateAgentState):
     """
     turn = state.get("turn_count", 0) 
     print(f"\n[비관론자 (Turn: {turn})] ------------------")
-    llm = ChatKanana()
     tools = [search_recent_news, search_recent_filings, read_news_content, read_parsed_filing]
     # 프롬프트 로드
     system_prompt = load_prompt("pessimist_debate_prompt")
-    # 에이전트 실행기 생성
-    agent_executor = create_agent(llm, tools, system_prompt)
+    # 에이전트 실행기 생성 (Tool-Calling 지원 o)
+    agent_executor = create_agent(tools, system_prompt)
     # 토론 맥락 구성
     opponent_initial = state.get("optimist_initial", "아직 의견이 없습니다.")
     history_list = state.get("debate_history", [])
@@ -138,18 +133,22 @@ def pessimistic_debate_node(state : DebateAgentState):
         "위 낙관적인 의견을 검토하고, 이를 반박할 수 있는 부정적인 지표나 뉴스를 도구를 사용해 검색하십시오."
         "그 후, 수치적 근거를 바탕으로 반박 논리를 7문장 내외로 작성해주세요."
     )
-    # 에이전트 실행
+    # 에이전트 실행 
     response = agent_executor.invoke({
         "ticker": state["ticker"],
         "input": input_message,
         "chat_history": []
     })
-    print(f"[비관론자 Turn {turn}] tool calls: {len(response.get('tool_calls', []))}")
+    print(f"[비관론자 Turn {turn}] tool calls: {len(response.tool_calls)}")
     # 결과
-    content = response["output"]
-    print(f"비관론자: {content}")
+    debate_output = DebateOutput(
+        ticker = state["ticker"],
+        text = response.text,
+        opponent_text = opponent_initial,
+    )
+    print(debate_output.text)
     return {
-        "debate_history" : [f"비관론자(Turn {turn}): {content}"],
+        "debate_history" : [f"비관론자(Turn {turn}): {debate_output.text}"],
         "turn_count" : turn + 1,
         "current_agent" : "pessimist"
     }
@@ -174,18 +173,55 @@ def summary_node(state: DebateAgentState):
         "양쪽이 제시한 수치적 근거와 뉴스 데이터를 객관적으로 비교 분석하여, 어느 쪽의 논리가 더 설득력 있는지 판단하세요."
         "그 후, 투자자가 주의해야 할 핵심 포인트와 최종 투자 의견을 종합적인 관점에서 작성해주세요."
     )
-    # 에이전트 실행 (tool call 필요 없으므로 일반 invoke 사용)
-    llm = ChatKanana()
+    # 에이전트 실행 (Tool Calling 필요 없으므로 일반 invoke 사용)
+    llm = ChatKanana(max_new_tokens = Config.KANANA_SUMMARY_MAX_NEW_TOKENS)
+    structured_prompt = (
+        system_prompt + "\n\n"
+        "반드시 아래 JSON 형식으로만 답변하세요. 설명 문장, 마크다운 없이 JSON 객체 하나만 출력하세요.\n"
+        '{"pros": "핵심 기회 요인 요약", "cons": "핵심 리스크 요인 요약", '
+        '"recommendation": "매수 또는 매도 또는 보류", "conclusion": "종합 결론 본문", '
+        '"evidence": [{"source": "news 또는 filing", "source_id": "ID", "summary": "핵심 사실 한 줄"}]}'
+    )
     messages = [
-        SystemMessage(content = system_prompt),
+        SystemMessage(content = structured_prompt),
         HumanMessage(content = input_message)
     ]
     # 결과
     response = llm.invoke(messages)
-    content = response.content
-    print(f"⚖️중재자⚖️: {content}")
+    raw_content = response.content
+    log_node_output("summary", "raw_llm", raw_content)
+
+    try:
+        parsed = _extract_first_json_object(raw_content)
+        if not parsed:
+            log_json_parse_warning("summary_node", raw_content)
+        raw_evidence = parsed.get("evidence", [])
+        evidence_items = []
+        for item in raw_evidence:
+            try:
+                evidence_items.append(EvidenceItem(
+                    ticker = state["ticker"],
+                    source = item.get("source"),
+                    source_id = str(item.get("source_id", "")),
+                    summary = str(item.get("summary", "")),
+                ))
+            except Exception:
+                pass
+        consensus = ConsensusOutput(
+            ticker = state["ticker"],
+            pros = parsed.get("pros", ""),
+            cons = parsed.get("cons", ""),
+            recommendation = parsed.get("recommendation", "보류"),
+            conclusion = parsed.get("conclusion", raw_content),
+            evidence = evidence_items,
+        )
+        final_text = consensus.to_report_text
+    except Exception:
+        final_text = raw_content
+    print(f"⚖️중재자⚖️: {final_text}")
+    log_node_output("summary", "final", final_text)
     return {
-        "final_consensus": content
+        "final_consensus": final_text
     }
 
 def save_debate_node(state : DebateAgentState):

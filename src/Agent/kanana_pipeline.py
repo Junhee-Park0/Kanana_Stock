@@ -149,11 +149,11 @@ def call_kanana(system_prompt: str, user_input: dict, max_new_tokens: int = KANA
 
 def _extract_first_json(text: str) -> str:
     """
-    텍스트에서 첫 번째로 완성된 JSON 객체를 추출한다.
+    텍스트에서 첫 번째로 완성된 JSON 객체를 추출
     
-    greedy 정규식('{.*}') 대신 중괄호 깊이를 직접 추적하여
-    '첫 { ~ 그에 대응하는 }' 구간만 정확히 잘라낸다.
-    이렇게 하면 JSON 뒤에 추가 텍스트가 붙어 있어도 안전하다.
+    정규식('{.*}') 대신 중괄호 깊이를 직접 추적하여
+    '첫 { ~ 그에 대응하는 }' 구간만 정확히 잘라내기
+    이렇게 하면 JSON 뒤에 추가 텍스트가 붙어 있어도 안전
     """
     start = text.find('{')
     if start == -1:
@@ -190,8 +190,6 @@ def call_kanana_structured(system_prompt: str, user_input: dict, output_schema: 
     """
     Kanana 모델의 output 형태를 한정(JSON)하여 호출하는 함수
     """
-    import json
-    import re
     from pydantic import ValidationError
 
     schema_description = (
@@ -218,17 +216,9 @@ def call_kanana_structured(system_prompt: str, user_input: dict, output_schema: 
 
     # JSON 파싱 및 Pydantic 검증
     try:
-        # 1) ```json ... ``` 코드블록 안의 JSON 우선 탐색 (greedy 매칭으로 변경하여 내부 }에 의한 조기 종료 방지)
-        codeblock_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", response_text, re.DOTALL | re.IGNORECASE)
-        if codeblock_match:
-            json_str = codeblock_match.group(1).strip()
-        else:
-            # 2) 중괄호 깊이 추적으로 첫 번째 완전한 JSON 객체만 추출
-            json_str = _extract_first_json(response_text)
-
-        # raw_decode: JSON 뒤에 여분의 텍스트가 있어도 첫 번째 유효한 JSON만 파싱
-        decoder = json.JSONDecoder()
-        data, _ = decoder.raw_decode(json_str.strip())
+        data = _extract_first_json_object(response_text)
+        if not data:
+            raise ValueError("No JSON object extracted from model output")
         result = output_schema(**data)
 
         if Config.ENABLE_LOCAL_LOGGING:
@@ -237,7 +227,7 @@ def call_kanana_structured(system_prompt: str, user_input: dict, output_schema: 
             })
         return result
 
-    except (json.JSONDecodeError, ValidationError) as e:
+    except (ValidationError, ValueError) as e:
         print(f"❌ Structured Output 파싱 실패 [{output_schema.__name__}]: {e}")
         print(f"원본 응답: {response_text[:300]}")
         
@@ -246,6 +236,205 @@ def call_kanana_structured(system_prompt: str, user_input: dict, output_schema: 
             log_error(e, f"call_kanana_structured - Schema: {output_schema.__name__}")
         raise
 
+def _fix_json_newlines(json_str: str) -> str:
+    """
+    모델 출력 JSON에서 문자열 값 안에 들어간 실제 개행문자를
+    JSON 이스케이프 시퀀스로 변환하여 파서가 수용할 수 있게 한다.
+    """
+    result = []
+    in_string = False
+    escape_next = False
+    for ch in json_str:
+        if escape_next:
+            result.append(ch)
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            result.append(ch)
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            result.append(ch)
+            continue
+        if in_string and ch == '\n':
+            result.append('\\n')
+            continue
+        if in_string and ch == '\r':
+            result.append('\\r')
+            continue
+        result.append(ch)
+    return ''.join(result)
+
+
+def _regex_extract_fields(text: str) -> dict:
+    """
+    JSON 파싱이 완전히 실패했을 때 regex로 주요 필드 값만 추출하는 최후 수단 fallback.
+    action, output, tool_name, pros, cons, recommendation, conclusion과
+    evidence 배열을 추출 시도한다.
+    """
+    import re, json
+    result = {}
+    string_fields = [
+        "action", "output", "tool_name",
+        "pros", "cons", "recommendation", "conclusion",
+    ]
+    for field in string_fields:
+        match = re.search(
+            rf'"{re.escape(field)}"\s*:\s*"((?:[^"\\]|\\.)*)"',
+            text, re.DOTALL
+        )
+        if match:
+            result[field] = match.group(1).replace('\\n', '\n').replace('\\"', '"')
+
+    args_match = re.search(r'"args"\s*:\s*(\{[^{}]*\})', text)
+    if args_match:
+        try:
+            result["args"] = json.loads(args_match.group(1))
+        except Exception:
+            pass
+
+    # evidence 배열: 배열 깊이 추적으로 정확한 범위 추출 후 파싱
+    ev_start = text.find('"evidence"')
+    if ev_start != -1:
+        bracket_start = text.find('[', ev_start)
+        if bracket_start != -1:
+            depth = 0
+            in_str = False
+            esc = False
+            ev_end = -1
+            for idx, ch in enumerate(text[bracket_start:], start=bracket_start):
+                if esc:
+                    esc = False
+                    continue
+                if ch == '\\' and in_str:
+                    esc = True
+                    continue
+                if ch == '"':
+                    in_str = not in_str
+                    continue
+                if in_str:
+                    continue
+                if ch == '[':
+                    depth += 1
+                elif ch == ']':
+                    depth -= 1
+                    if depth == 0:
+                        ev_end = idx
+                        break
+            if ev_end != -1:
+                evidence_str = text[bracket_start:ev_end + 1]
+
+                # 1차: 직접 파싱
+                parsed_ev = None
+                for candidate in [evidence_str, _fix_json_newlines(evidence_str)]:
+                    try:
+                        parsed_ev = json.loads(candidate)
+                        break
+                    except Exception:
+                        pass
+
+                if parsed_ev is not None:
+                    result["evidence"] = parsed_ev
+                else:
+                    # 2차: 항목별 regex 추출 (배열 전체 파싱 실패 시)
+                    items = []
+                    for m in re.finditer(
+                        r'"source"\s*:\s*"(news|filing)"'
+                        r'.*?"source_id"\s*:\s*"([^"]*)"'
+                        r'.*?"summary"\s*:\s*"((?:[^"\\]|\\.)*)"',
+                        evidence_str, re.DOTALL
+                    ):
+                        items.append({
+                            "source": m.group(1),
+                            "source_id": m.group(2),
+                            "summary": m.group(3).replace('\\n', '\n'),
+                        })
+                    if items:
+                        result["evidence"] = items
+
+    return result
+
+
+def _extract_first_json_object(text: str) -> dict:
+    """
+    텍스트에서 첫 번째 완성된 JSON 객체를 추출하고 dict로 파싱하여 반환
+    3단계 fallback:
+      1차) 직접 json.JSONDecoder 파싱
+      2차) 문자열 내부 개행 이스케이프 후 재파싱 (_fix_json_newlines)
+      3차) regex로 주요 필드만 추출 (_regex_extract_fields)
+    모든 단계 실패 시 빈 dict 반환.
+    """
+    import json
+    from utils.logger import log_json_parse_warning
+
+    json_str = _extract_first_json(text)
+    if not json_str:
+        return {}
+
+    # 1차: 직접 파싱
+    try:
+        decoder = json.JSONDecoder()
+        data, _ = decoder.raw_decode(json_str.strip())
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        pass
+
+    # 2차: 문자열 내 개행 이스케이프 후 재파싱
+    try:
+        fixed = _fix_json_newlines(json_str)
+        decoder = json.JSONDecoder()
+        data, _ = decoder.raw_decode(fixed.strip())
+        log_json_parse_warning("_extract_first_json_object", json_str[:200], fallback_used="fix_newlines")
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        pass
+
+    # 3차: regex 필드 추출
+    result = _regex_extract_fields(text)
+    if result:
+        log_json_parse_warning("_extract_first_json_object", json_str[:200], fallback_used="regex_extract")
+        return result
+
+    log_json_parse_warning("_extract_first_json_object", json_str[:200], fallback_used="all_failed→{}")
+    return {}
+
+
+def _extract_output_only(text: str) -> str:
+    """
+    모델이 output 필드 내부에 JSON을 중첩하거나 마크다운 코드블록을 포함한 경우 정리
+    순수한 출력 문자열만 반환한다.
+    fallback: JSON 파싱 실패 시 regex로 "output" 필드 값 직접 추출.
+    """
+    import re
+    if not text or not text.strip():
+        return text
+
+    stripped = text.strip()
+
+    # 마크다운 코드블록 제거
+    if stripped.startswith("```"):
+        lines = stripped.split("\n")
+        inner_lines = lines[1:-1] if len(lines) > 2 else lines[1:]
+        stripped = "\n".join(inner_lines).strip()
+
+    if stripped.startswith("{"):
+        # JSON 파싱으로 output 필드 추출
+        parsed = _extract_first_json_object(stripped)
+        if "output" in parsed:
+            return str(parsed["output"]).strip()
+
+        # JSON 파싱 실패 시 regex fallback
+        match = re.search(
+            r'"output"\s*:\s*"((?:[^"\\]|\\.)*)"',
+            stripped, re.DOTALL
+        )
+        if match:
+            return match.group(1).replace('\\n', '\n').replace('\\"', '"').strip()
+
+    return stripped
+
+
 # 툴 바인딩을 위한..
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, AIMessage, SystemMessage, HumanMessage
@@ -253,7 +442,7 @@ from langchain_core.outputs import ChatResult, ChatGeneration
 from pydantic import Field
 
 class ChatKanana(BaseChatModel):
-    """LangChain 에이전트와 호환되는 Kanana 커스텀 채팅 모델 클래스"""
+    """LangChain 에이전트와 호환되는 Kanana 커스텀 채팅 모델 클래스 (Tool-Calling 지원 x)"""
     model_name : str = "Kanana-Local"
     max_new_tokens : int = KANANA_MAX_NEW_TOKENS
 

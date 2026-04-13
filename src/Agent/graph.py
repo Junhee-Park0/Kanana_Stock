@@ -15,37 +15,37 @@ def agent_debate_graph():
     workflow = StateGraph(DebateAgentState)
 
     # 노드 추가
-    workflow.add_node("optimist_initial", optimistic_initial_node)
-    workflow.add_node("pessimist_initial", pessimistic_initial_node)
-    workflow.add_node("optimist_debate", optimistic_debate_node)
-    workflow.add_node("pessimist_debate", pessimistic_debate_node)
-    workflow.add_node("summary", summary_node)
-    workflow.add_node("save_debate", save_debate_node)
+    workflow.add_node("[Initial] Optimist", optimistic_initial_node)
+    workflow.add_node("[Initial] Pessimist", pessimistic_initial_node)
+    workflow.add_node("[Debate] Optimist", optimistic_debate_node)
+    workflow.add_node("[Debate] Pessimist", pessimistic_debate_node)
+    workflow.add_node("Consensus Generator", summary_node)
+    workflow.add_node("Save Session", save_debate_node)
 
     # 엣지 추가
     
     # 1. 낙관론자 초기 의견
-    workflow.add_edge(START, "optimist_initial")
+    workflow.add_edge(START, "[Initial] Optimist")
     
     # 2. 비관론자 초기 의견 
-    workflow.add_edge("optimist_initial", "pessimist_initial")
+    workflow.add_edge("[Initial] Optimist", "[Initial] Pessimist")
 
     # 3. 토론 시작 - 낙관론자
-    workflow.add_edge("pessimist_initial", "optimist_debate")
+    workflow.add_edge("[Initial] Pessimist", "[Debate] Optimist")
     
     # 4. 비관론자 반박 
-    workflow.add_edge("optimist_debate", "pessimist_debate")
+    workflow.add_edge("[Debate] Optimist", "[Debate] Pessimist")
 
     # 5. 조건부 루프 
     workflow.add_conditional_edges(
-        "pessimist_debate",
+        "[Debate] Pessimist",
         should_continue,
         {
-            "optimist" : "optimist_debate",
-            "summary" : "summary"
+            "optimist" : "[Debate] Optimist",
+            "summary" : "Consensus Generator"
         }
     )
 
-    workflow.add_edge("summary", "save_debate")
-    workflow.add_edge("save_debate", END)
+    workflow.add_edge("Consensus Generator", "Save Session")
+    workflow.add_edge("Save Session", END)
     return workflow.compile()

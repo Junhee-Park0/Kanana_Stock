@@ -15,7 +15,9 @@ def setup_logger(name: str = "Stock_Agent"):
     
     # 로거 생성
     logger = logging.getLogger(name)
-    
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
     if logger.handlers:
         logger.handlers.clear()
     
@@ -23,11 +25,6 @@ def setup_logger(name: str = "Stock_Agent"):
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
-    # 콘솔 핸들러
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
     
     # 파일 핸들러
     if Config.ENABLE_LOCAL_LOGGING:
@@ -49,15 +46,37 @@ def log_conversation(user_message: str, ai_response: str, session_id: str = None
     """대화 로그 기록"""
     logger.info(f"[CONVERSATION] Session: {session_id}")
     logger.info(f"[USER] {user_message}")
-    logger.info(f"[AI] {ai_response}")
+    logger.info(f"[LLM] {ai_response}")
 
 def log_error(error: Exception, context: str = ""):
     """에러 로그 기록"""
-    logger.error(f"[ERROR] {context}: {str(error)}", exc_info=True)
+    logger.error(f"[ERROR] {context}: {str(error)}", exc_info = True) # 에러 난 위치 저장
 
 def log_agent_action(action: str, details: dict = None):
     """Agent 액션 로그 기록"""
-    log_msg = f"[AGENT] {action}"
+    log_message = f"[AGENT] {action}"
     if details:
-        log_msg += f" - Details: {details}"
-    logger.info(log_msg) 
+        log_message += f" - Details: {details}"
+    logger.info(log_message)
+
+def log_tool_call(step: int, tool_name: str, args: dict, result_count = None):
+    """Tool Call 로그 기록"""
+    import json
+    step_label = "auto" if step == 0 else str(step)
+    try:
+        args_str = json.dumps(args, ensure_ascii = False)
+    except Exception:
+        args_str = str(args)
+    message = f"[TOOL_CALL - step {step_label}] tool = {tool_name} args = {args_str}"
+    if result_count is not None:
+        message += f" result_count = {result_count}"
+    logger.info(message)
+
+def log_json_parse_warning(context: str, raw_text: str, fallback_used: str = ""):
+    """JSON 파싱 실패 경고 로그 기록"""
+    preview = raw_text[:400] + "..." if len(raw_text) > 400 else raw_text
+    message = f"[JSON_WARN] context = {context}"
+    if fallback_used:
+        message += f" fallback_used = {fallback_used}"
+    message += f"\n  └─ raw_preview: {preview}"
+    logger.warning(message)
