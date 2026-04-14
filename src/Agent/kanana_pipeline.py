@@ -190,13 +190,39 @@ def call_kanana_structured(system_prompt: str, user_input: dict, output_schema: 
         return result
 
     except (ValidationError, ValueError) as e:
-        print(f"❌ Structured Output 파싱 실패 [{output_schema.__name__}]: {e}")
+        print(f"❌ Structured Output 1차 파싱 실패 [{output_schema.__name__}]: {e}")
         print(f"원본 응답: {response_text[:300]}")
-        
-        if Config.ENABLE_LOCAL_LOGGING:
-            from utils.logger import log_error
-            log_error(e, f"call_kanana_structured - Schema: {output_schema.__name__}")
-        raise
+
+        # 1차 실패 시: 모델이 만든 응답을 다시 'JSON 정리 전용 패스'로 복구 시도
+        repair_prompt = (
+            "당신의 작업은 아래 텍스트를 스키마에 맞는 JSON 한 개로 정리하는 것입니다.\n"
+            "설명, 마크다운 코드블록, 추가 문장 없이 JSON 객체만 출력하세요.\n"
+            "값이 불완전하거나 확실하지 않으면 빈 문자열 또는 빈 리스트를 사용하세요.\n"
+            "특히 JSON 문자열이 중간에 끊기지 않도록 각 문자열을 짧고 완결되게 작성하세요.\n\n"
+            "[스키마]\n"
+            f"{output_schema.model_json_schema()}\n\n"
+            "[원본 텍스트]\n"
+            f"{response_text}\n"
+        )
+
+        repaired_text = call_kanana(repair_prompt, {}, max_new_tokens = max(max_new_tokens, 1536))
+        try:
+            repaired_data = _extract_first_json(repaired_text)
+            if not isinstance(repaired_data, dict):
+                raise ValueError("No JSON object extracted from repaired output")
+            repaired_result = output_schema(**repaired_data)
+            if Config.ENABLE_LOCAL_LOGGING:
+                log_agent_action("Structured Output 파싱 성공(복구 패스)", {
+                    "schema": output_schema.__name__
+                })
+            return repaired_result
+        except (ValidationError, ValueError) as repair_err:
+            print(f"❌ Structured Output 복구 파싱 실패 [{output_schema.__name__}]: {repair_err}")
+            print(f"복구 응답: {repaired_text[:300]}")
+            if Config.ENABLE_LOCAL_LOGGING:
+                from utils.logger import log_error
+                log_error(repair_err, f"call_kanana_structured(repair) - Schema: {output_schema.__name__}")
+            raise
 
 def _extract_first_json(text: Any) -> dict | None:
     """
@@ -242,6 +268,27 @@ def _extract_first_json(text: Any) -> dict | None:
     # 닫는 }를 끝까지 못 찾은 경우 — 유효한 JSON이 아님
     return None
 
+def extract_pure_text(raw_text: Any) -> str:
+    """
+    모델이 output 필드 내부에 JSON을 중첩하거나 마크다운 코드블록을 포함한 경우 정리
+    -> 순수한 출력 문자열만 반환 (최종 리포트 저장용)
+    """
+    if not raw_text: return ""
+    if '"output":' in raw_text or '"action":' in raw_text:
+        import json
+        import re
+        try:
+            match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+            if match:
+                json_obj = json.loads(match.group(0))
+                return json_obj.get("output", raw_text)
+        except:
+            match = re.search(r'"output"\s*:\s*"(.*?)"', raw_text, re.DOTALL)
+            if match:
+                return match.group(1).replace('\\n', '\n')
+    
+    clean_text = raw_text.replace("```json", "").replace("```", "").strip()
+    return clean_text
 
 def _extract_output_only(text: str) -> str:
     """

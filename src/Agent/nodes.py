@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from config import Config
 
-from src.Agent.kanana_pipeline import call_kanana_structured
+from src.Agent.kanana_pipeline import call_kanana_structured, extract_pure_text
 from src.Agent.states import DebateAgentState
 from src.Agent.functions import load_prompt, create_agent
 from src.Agent.schemas import ConsensusOutput
@@ -35,10 +35,12 @@ def optimistic_initial_node(state : DebateAgentState):
         "chat_history": []
     })
     # 결과 출력
-    print(f"\n[낙관론자 답변]:\n{response.text}")
+    clean_output = extract_pure_text(response.text)
+    print(f"\n[낙관론자 답변]:\n{clean_output}")
+    print(type(clean_output))
     print(f"[참고한 근거 개수]: {len(response.evidence)}개")
     return {
-        "optimist_initial" : response.text,
+        "optimist_initial" : clean_output,
         "optimist_evidence" : response.evidence,
         "tool_calls" : response.tool_calls
     }
@@ -66,10 +68,12 @@ def pessimistic_initial_node(state : DebateAgentState):
         "chat_history": []
     })
     # 결과 출력
-    print(f"\n[비관론자 답변]:\n{response.text}")
+    clean_output = extract_pure_text(response.text)
+    print(f"\n[비관론자 답변]:\n{clean_output}")
+    print(type(clean_output))
     print(f"[참고한 근거 개수]: {len(response.evidence)}개")
     return {
-        "pessimist_initial" : response.text,
+        "pessimist_initial" : clean_output,
         "pessimist_evidence" : response.evidence,
         "tool_calls" : response.tool_calls
     }
@@ -95,7 +99,10 @@ def optimistic_debate_node(state : DebateAgentState):
         f"대상 종목: {ticker}\n\n"
         f"[상대방의 초기 의견]\n{opponent_initial}\n\n"
         f"[지난 토론 기록]\n{history_str}\n\n"
-        "위 비관적인 의견의 허점을 찾아내고, 도구를 사용해 이를 반박할 긍정적인 지표나 뉴스를 제시하십시오."
+        "### 규칙: 차별화된 반박 수행 ###\n"
+        f"당신의 이전 답변인 위 [지난 토론 기록]에 포함된 문장을 그대로 사용하는 것은 엄격히 금지됩니다."
+        "반드시 새로운 근거와 논리를 1개 이상 추가하거나, 이전과 다른 각도에서 반박하십시오."
+        "새로운 뉴스 ID나 공시 지표를 활용하여 논리를 보강하십시오."
     )
     # 에이전트 실행
     response = agent_executor.invoke({
@@ -107,7 +114,9 @@ def optimistic_debate_node(state : DebateAgentState):
     print(f"[낙관론자 Turn {turn}] 분석 완료 (도구 사용: {len(response.tool_calls)}회)")
     print(f"[상대 의견 요약]: {response.opponent_text[:50]}...")
     # 결과
-    new_history = f"낙관론자(Turn {turn}): {response.text}"
+    clean_output = extract_pure_text(response.text)
+    new_history = f"낙관론자(Turn {turn}): {clean_output}"
+    print(type(new_history))
     print(new_history)
     return {
         "debate_history" : [new_history],
@@ -138,6 +147,10 @@ def pessimistic_debate_node(state : DebateAgentState):
         f"대상 종목: {ticker}\n\n"
         f"[상대방의 초기 의견]\n{opponent_initial}\n\n"
         f"[지난 토론 기록]\n{history_str}\n\n"
+        "### 규칙: 차별화된 반박 수행 ###\n"
+        f"당신의 이전 답변인 위 [지난 토론 기록]에 포함된 문장을 그대로 사용하는 것은 엄격히 금지됩니다."
+        "반드시 새로운 근거와 논리를 1개 이상 추가하거나, 이전과 다른 각도에서 반박하십시오."
+        "새로운 뉴스 ID나 공시 지표를 활용하여 논리를 보강하십시오."
         "위 낙관적인 의견의 허점을 찾아내고, 도구를 사용해 이를 반박할 부정적인 지표나 뉴스를 제시하십시오."
         "그 후, 수치적 근거를 바탕으로 반박 논리를 7문장 내외로 작성해주세요."
     )
@@ -151,7 +164,9 @@ def pessimistic_debate_node(state : DebateAgentState):
     print(f"[비관론자 Turn {turn}] 분석 완료 (도구 사용: {len(response.tool_calls)}회)")
     print(f"[상대 의견 요약]: {response.opponent_text[:50]}...")
     # 결과
-    new_history = f"비관론자(Turn {turn}): {response.text}"
+    clean_output = extract_pure_text(response.text)
+    new_history = f"비관론자(Turn {turn}): {clean_output}"
+    print(type(new_history))
     print(new_history)
     return {
         "debate_history" : [new_history],

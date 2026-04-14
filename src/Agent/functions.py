@@ -60,7 +60,7 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
             scratchpad = []
             final_output = ""
             raw_evidence = []
-            max_steps = 4
+            max_steps = 2
             tool_calls = []
             ticker = str(payload.get("ticker", "")).strip().upper()
 
@@ -107,7 +107,7 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
                 # read_news_content
                 news_rows = auto_tool_call_results.get("search_recent_news", [])
                 if isinstance(news_rows, list) and "read_news_content" in tool_map:
-                    for row in news_rows[:5]: # 최대 5개까지 읽기
+                    for row in news_rows[:10]: # 최대 10개까지 읽기
                         article_id = row.get("article_id") if isinstance(row, dict) else None
                         if article_id is None:
                             continue
@@ -185,21 +185,30 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
                 iteration_prompt = (
                     f"{system_prompt}\n\n"
                     "### 필수 출력 규칙 ###\n"
-                    "오직 하나의 유효한 JSON 객체만을 출력해야 합니다. 서론, 부연 설명, 마크다운 코드는 절대 금지합니다.\n\n"
+                    "1. 오직 하나의 유효한 JSON 객체만을 출력해야 합니다. 서론, 부연 설명, 마크다운 코드는 절대 금지합니다.\n"
+                    "2. [중요] 동일한 파일이나 뉴스를 반복해서 읽지 마십시오. 이미 '조사 기록'에 있는 ID는 다시 호출할 수 없습니다.\n"
+                    "3. [종료 조건] 조사 기록에 충분한 근거(수치, 사실)가 모였다면, 추가 도구 호출 없이 즉시 'final'을 선택하십시오.\n"
+                    f"4. 현재 실행 단계가 많아질수록(최대 {max_steps}단계), 반드시 'final' 답변 생성을 우선시하십시오.\n\n"
+
+                    "### 중복 답변 금지 규칙 ###\n"
+                    f"1. 당신의 이전 답변 기록({scratch_text})에 포함된 문장이나 표현을 **그대로 복사하지 마십시오.**\n"
+                    "2. 반드시 새로운 근거와 논리를 1개 이상 추가하거나, 이전과 다른 각도에서 반박하십시오.\n"
+                    "3. 동일한 논리를 반복하는 것은 **분석 실패**로 간주됩니다.\n\n"
 
                     "원하는 방향에 따라 아래 두 가지 행동 중 한 가지를 선택하세요.\n"
-                    "1) 추가 정보가 필요할 때 (도구 호출):\n"
+                    "1) 추가 정보가 필요할 때 (중복 호출 금지):\n"
                     '{"action": "tool", "tool_name": "도구 이름", "args": {"key": "value"}}\n'
-                    "2) 최종 분석이 완료되었을 때 (최종 답변 생성):\n"
+                    "2) 수집된 정보로 반박/분석이 가능할 때 (최종 답변):\n"
                     f"{schema_json}\n\n"
 
-                    "### 참고 정보 ###\n"
-                    f"- 사용 가능한 도구:\n{tool_specs}\n\n"
+                    "### 현재 상황 데이터 ###\n"
                     f"- 상대방의 의견:\n{opponent_text}\n\n"
                     f"- 현재까지의 조사 기록:\n{scratch_text}\n"
 
-                    "### 현재 작업 ###\n"
-                    "조사 기록을 바탕으로 다음 행동(tool 또는 final)을 결정하여 JSON으로만 응답하세요."
+                    "### 체크리스트 ###\n"
+                    "기존 조사 기록에 없는 새로운 정보가 더 필요한가요?"
+                    "그렇지 않다면 지금 즉시 'final' 액션으로 전환하여 결론을 내십시오."
+                    "꼭 JSON으로만 응답하세요."
                 )
                 
                 model_text = call_kanana(iteration_prompt, {}, max_new_tokens = KANANA_MAX_NEW_TOKENS).strip()
@@ -213,14 +222,19 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
 
                 if action == "final":
                     # output 부분만 추출하기
-                    final_output = _extract_output_only(str(decision.get("output", "")))
+                    final_output = _extract_output_only(model_text)
+                    json_internal_output = str(decision.get("output", "")).strip()
+                    if len(final_output) < 20 and len(json_internal_output) > len(final_output):
+                        final_output = json_internal_output
                     # evidence 처리
                     raw_evidence = decision.get("evidence", [])
                     evidence_items = []
                     if isinstance(raw_evidence, list):
                         for evidence in raw_evidence:
                             try:
-                                evidence_items.append(EvidenceItem(**evidence))
+                                if isinstance(evidence, dict):
+                                    evidence["source_id"] = str(evidence.get("source_id", ""))
+                                    evidence_items.append(EvidenceItem(**evidence))
                             except: 
                                 continue
                     # 역할별 evidence 출력값 할당
