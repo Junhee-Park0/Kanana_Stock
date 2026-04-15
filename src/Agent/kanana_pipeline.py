@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import json
+import re
 
 # Config 및 Logger 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -22,12 +23,11 @@ def get_kanana_pipeline():
     if _pipeline is None:
         start_time = time.time()
         model_path = Config.KANANA_MODEL_PATH
-        
+
         print("📥 로컬 토크나이저 로드 중...")
         tokenizer_start = time.time()
         _tokenizer = AutoTokenizer.from_pretrained(model_path, fix_mistral_regex = True)
         print(f"   ✓ 토크나이저 로드 완료 ({time.time() - tokenizer_start:.1f}초)")
-
         print("📦 로컬 모델 로드 중...")
         model_start = time.time()
         model = AutoModelForCausalLM.from_pretrained(
@@ -36,7 +36,6 @@ def get_kanana_pipeline():
             torch_dtype = torch.float16
         )
         print(f"   ✓ 로컬 모델 로드 완료 ({time.time() - model_start:.1f}초)")
-        
         print("🔧 파이프라인 생성 중...")
         pipeline_start = time.time()
         _pipeline = hf_pipeline(
@@ -98,7 +97,8 @@ def call_kanana(system_prompt: str, user_input: dict, max_new_tokens: int = KANA
         response = pipeline(
             messages,
             max_new_tokens = max_new_tokens,
-            do_sample = False,
+            do_sample = True,
+            temperature = 0.5,
             return_full_text = False,
             eos_token_id = tokenizer.eos_token_id
         )
@@ -163,7 +163,7 @@ def call_kanana_structured(system_prompt: str, user_input: dict, output_schema: 
         f"{output_schema.model_json_schema()}\n\n"
         "[중요]\n"
         "- 반드시 최상위에 실제 필드 값들만 있는 JSON 객체를 출력하세요.\n"
-        "- 예: {{\"pros\": \"...\", \"cons\": \"...\", \"conclusion\": \"...\", \"recommendation\": \"...\", \"evidence\": [{{...}}]}}\n\n"
+        "- 예: {{\"pros\": \"...\", \"cons\": \"...\", \"conclusion\": \"...\", \"recommendation\": \"...\"}}\n\n"
     )
     full_prompt = system_prompt + schema_prompt
     
@@ -178,9 +178,15 @@ def call_kanana_structured(system_prompt: str, user_input: dict, output_schema: 
 
     # JSON 파싱 및 Pydantic 검증
     try:
-        data = _extract_first_json(response_text)
-        if not isinstance(data, dict):
-            raise ValueError("No JSON object extracted from model output")
+        codeblock_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", response_text, re.DOTALL | re.IGNORECASE)
+        if codeblock_match:
+            json_str = codeblock_match.group(1).strip()
+        else:
+            json_str = _extract_first_json(response_text)
+
+        decoder = json.JSONDecoder()
+        data, _ = decoder.raw_decode(json_str.strip())
+        data = _normalize_recommendation(data)
         result = output_schema(**data)
 
         if Config.ENABLE_LOCAL_LOGGING:
@@ -189,11 +195,16 @@ def call_kanana_structured(system_prompt: str, user_input: dict, output_schema: 
             })
         return result
 
-    except (ValidationError, ValueError) as e:
-        print(f"❌ Structured Output 1차 파싱 실패 [{output_schema.__name__}]: {e}")
+    except (json.JSONDecodeError, ValidationError) as e:
+        print(f"❌ Structured Output 파싱 실패 [{output_schema.__name__}]: {e}")
         print(f"원본 응답: {response_text[:300]}")
+        
+        if Config.ENABLE_LOCAL_LOGGING:
+            from utils.logger import log_error
+            log_error(e, f"call_kanana_structured - Schema: {output_schema.__name__}")
+        raise
 
-        # 1차 실패 시: 모델이 만든 응답을 다시 'JSON 정리 전용 패스'로 복구 시도
+        # 1차 실패 시: 모델이 만든 응답 복구 시도
         repair_prompt = (
             "당신의 작업은 아래 텍스트를 스키마에 맞는 JSON 한 개로 정리하는 것입니다.\n"
             "설명, 마크다운 코드블록, 추가 문장 없이 JSON 객체만 출력하세요.\n"
@@ -216,6 +227,7 @@ def call_kanana_structured(system_prompt: str, user_input: dict, output_schema: 
                     "schema": output_schema.__name__
                 })
             return repaired_result
+
         except (ValidationError, ValueError) as repair_err:
             print(f"❌ Structured Output 복구 파싱 실패 [{output_schema.__name__}]: {repair_err}")
             print(f"복구 응답: {repaired_text[:300]}")
@@ -232,16 +244,15 @@ def _extract_first_json(text: Any) -> dict | None:
     '첫 { ~ 그에 대응하는 }' 구간만 정확히 잘라내기
     이렇게 하면 JSON 뒤에 추가 텍스트가 붙어 있어도 안전
     """
-    text = str(text)
-    start = text.find('{') # 가장 먼저 나타나는 {의 인덱스
-    if start == -1: # 없다면
-        return None
+    start = text.find('{')
+    if start == -1:
+        return text.strip()
 
     depth = 0
     in_string = False
     escape_next = False
 
-    for i, ch in enumerate(text[start:], start = start): # 나머지 부분에서
+    for i, ch in enumerate(text[start:], start=start): # 나머지 부분에서
         if escape_next:
             escape_next = False
             continue
@@ -258,15 +269,32 @@ def _extract_first_json(text: Any) -> dict | None:
         elif ch == '}': # 찾으면 stop
             depth -= 1
             if depth == 0: # 깊이가 0이라면 딱 맞춰진 { }을 찾았다는 뜻 -> 그 부분만 자르기
-                candidate = text[start:i + 1]
-                try:
-                    parsed = json.loads(candidate)
-                    return parsed if isinstance(parsed, dict) else None
-                except json.JSONDecodeError:
-                    return None
+                return text[start:i + 1]
 
-    # 닫는 }를 끝까지 못 찾은 경우 — 유효한 JSON이 아님
-    return None
+    # 닫는 }를 끝까지 못 찾은 경우 — 잘린 응답이므로 시작부터 끝까지 반환
+    return text[start:].strip()
+
+def _normalize_recommendation(data: Any) -> Any:
+    """recommendation 필드를 스키마 허용값(매수/매도/보류)으로 정규화."""
+    if not isinstance(data, dict):
+        return data
+
+    raw = data.get("recommendation")
+    if raw is None:
+        return data
+
+    text = str(raw).strip()
+    if text in {"매수", "매도", "보류"}:
+        return data
+
+    if "매수" in text:
+        data["recommendation"] = "매수"
+    elif "매도" in text:
+        data["recommendation"] = "매도"
+    elif "보류" in text:
+        data["recommendation"] = "보류"
+
+    return data
 
 def extract_pure_text(raw_text: Any) -> str:
     """
@@ -323,3 +351,4 @@ def _extract_output_only(text: str) -> str:
             return match.group(1).replace('\\n', '\n').replace('\\"', '"').strip()
 
     return stripped
+    

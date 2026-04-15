@@ -18,7 +18,7 @@ class Config:
     # ============================================================================
     KANANA_MODEL_NAME = "kakaocorp/kanana-1.5-2.1b-instruct-2505"
     KANANA_MAX_NEW_TOKENS = int(os.getenv("KANANA_MAX_NEW_TOKENS", "512"))
-    KANANA_SUMMARY_MAX_NEW_TOKENS = int(os.getenv("KANANA_SUMMARY_MAX_NEW_TOKENS", "1024"))
+    KANANA_SUMMARY_MAX_NEW_TOKENS = int(os.getenv("KANANA_SUMMARY_MAX_NEW_TOKENS", "2048"))
 
     # ============================================================================
     # 경로 설정

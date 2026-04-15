@@ -1,10 +1,10 @@
 from typing import Dict, Literal, Any
 import yaml
 import json
-
+from datetime import datetime
 from src.Agent.states import DebateAgentState
 from src.Agent.kanana_pipeline import call_kanana, _extract_first_json, _extract_output_only
-from src.Agent.schemas import EvidenceItem, InitialOutput, DebateOutput
+from src.Agent.schemas import InitialOutput, DebateOutput
 from utils.logger import log_tool_call
 
 from config import Config
@@ -59,7 +59,6 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
             )
             scratchpad = []
             final_output = ""
-            raw_evidence = []
             max_steps = 2
             tool_calls = []
             ticker = str(payload.get("ticker", "")).strip().upper()
@@ -171,23 +170,31 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
                                 f"[Step 0] Tool `read_parsed_filing` failed: {type(e).__name__}: {e}"
                             )
 
-            # 출력 스키마 설정 (예시) - 모델은 evidence 형식을 여기서 확인
-            if agent_role == "initial":
-                schema_json = "{'action': 'final', 'output': '분석 결과', 'evidence': [{{'source': 'news 또는 filing', 'source_id': 'ID', 'summary': '요약'}}]}"
-            else:
-                schema_json = "{'action': 'final', 'output': '상대 의견 반박 내용', 'opponent_text': '상대방 의견 요약', 'evidence': [{{'source': 'news 또는 filing', 'source_id': 'ID', 'summary': '핵심 사실 한 줄'}}]}"
-
             # 매 step마다 Tool Call 결과 기록, 프롬프트에 주입
             for step in range(1, max_steps + 1): 
                 scratch_text = "\n".join(scratchpad) if scratchpad else "(없음)" # Tool Call 중간 작업 기록
+
+                today = datetime.now().strftime("%Y년 %m월 %d일")
                 
                 # 매번 기존 프롬프트에 더해서 넣어주는 내용
                 iteration_prompt = (
                     f"{system_prompt}\n\n"
+                    "### 최신성 사수: 시점 관리 규칙 ###\n"
+                    f"1. [현재 시점]: 지금은 **{today}**입니다.\n"
+                    "2. [데이터 필터링]: 2023~2024년 데이터는 '과거 기록'일 뿐입니다. 반드시 **2025년 하반기 이후의 뉴스 및 공시**를 우선적으로 탐색하십시오.\n"
+                    "3. [응답 생성 시]: 응답에 2025년 이전의 이야기(2023~2024년)가 포함되면 즉시 **응답 실패**로 간주됩니다.\n\n"
+                    
+                    "### 데이터 필터링 규칙: 주제 식별 ###\n"
+                    f"1. 기사의 주인공 확인: 뉴스나 공시의 수혜자가 반드시 {ticker} 본체여야 합니다.\n"
+                    f"2. 간접 호재 배제: 파트너사, 경쟁사, 혹은 산업 전반의 호재를 {ticker}의 직접적인 실적 호재로 둔갑시키지 마십시오.\n"
+                    f"3. 질문 던지기: 이 사건이 {ticker}의 재무제표(매출/영업이익)에 '직접적'으로 숫자를 바꿀 수 있는가? 를 자문하고, 아니라면 '간접 참고 자료'로만 분류하십시오.\n"
+                    f"4. 기사의 내용이 {ticker}와 직접적인 관련이 없다면, 무시하고 넘어가도 괜찮습니다.\n\n"
+                    
                     "### 필수 출력 규칙 ###\n"
-                    "1. 오직 하나의 유효한 JSON 객체만을 출력해야 합니다. 서론, 부연 설명, 마크다운 코드는 절대 금지합니다.\n"
-                    "2. [중요] 동일한 파일이나 뉴스를 반복해서 읽지 마십시오. 이미 '조사 기록'에 있는 ID는 다시 호출할 수 없습니다.\n"
-                    "3. [종료 조건] 조사 기록에 충분한 근거(수치, 사실)가 모였다면, 추가 도구 호출 없이 즉시 'final'을 선택하십시오.\n"
+                    "1. 추가 정보가 필요하면 반드시 아래 JSON 형식으로 도구를 호출하십시오.\n"
+                    '{"action": "tool", "tool_name": "...", "args": {...}}\n'
+                    "2. 충분한 정보가 모였다면, JSON 형식을 무시하고 즉시 '최종 분석 리포트' 본문(한글 6-8문장)만 작성하십시오.\n"
+                    "3. 최종 답변 시에는 절대로 JSON 포맷을 지키려 애쓰지 말고, 분석 내용만 그대로 출력하십시오.\n\n"
                     f"4. 현재 실행 단계가 많아질수록(최대 {max_steps}단계), 반드시 'final' 답변 생성을 우선시하십시오.\n\n"
 
                     "### 중복 답변 금지 규칙 ###\n"
@@ -199,60 +206,39 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
                     "1) 추가 정보가 필요할 때 (중복 호출 금지):\n"
                     '{"action": "tool", "tool_name": "도구 이름", "args": {"key": "value"}}\n'
                     "2) 수집된 정보로 반박/분석이 가능할 때 (최종 답변):\n"
-                    f"{schema_json}\n\n"
-
-                    "### 현재 상황 데이터 ###\n"
-                    f"- 상대방의 의견:\n{opponent_text}\n\n"
-                    f"- 현재까지의 조사 기록:\n{scratch_text}\n"
+                    "JSON이 아닌, 일반 문자열 분석 본문만 출력\n\n"
 
                     "### 체크리스트 ###\n"
                     "기존 조사 기록에 없는 새로운 정보가 더 필요한가요?"
                     "그렇지 않다면 지금 즉시 'final' 액션으로 전환하여 결론을 내십시오."
-                    "꼭 JSON으로만 응답하세요."
+                    "인사말이나 서론 없이, 응답만을 문장으로 출력하세요."
                 )
                 
                 model_text = call_kanana(iteration_prompt, {}, max_new_tokens = KANANA_MAX_NEW_TOKENS).strip()
                 decision = _extract_first_json(model_text)
 
-                # json 파싱 실패 시
-                if not decision:
-                    decision = {"action": "final", "output": model_text}
-
-                action = str(decision.get("action", "")).lower().strip()
+                # 결과 파싱해오기
+                if not isinstance(decision, dict) or "action" not in decision:
+                    action = "final"
+                    final_output = model_text.strip()
+                else:
+                    action = str(decision.get("action", "")).lower().strip()
+                    final_output = str(decision.get("output", "")).strip()
 
                 if action == "final":
-                    # output 부분만 추출하기
-                    final_output = _extract_output_only(model_text)
-                    json_internal_output = str(decision.get("output", "")).strip()
-                    if len(final_output) < 20 and len(json_internal_output) > len(final_output):
-                        final_output = json_internal_output
-                    # evidence 처리
-                    raw_evidence = decision.get("evidence", [])
-                    evidence_items = []
-                    if isinstance(raw_evidence, list):
-                        for evidence in raw_evidence:
-                            try:
-                                if isinstance(evidence, dict):
-                                    evidence["source_id"] = str(evidence.get("source_id", ""))
-                                    evidence_items.append(EvidenceItem(**evidence))
-                            except: 
-                                continue
-                    # 역할별 evidence 출력값 할당
+                    if len(final_output) < 30:
+                        final_output = model_text.strip()
+
+                    # 역할별 출력값 할당
                     if agent_role == "initial":
                         return InitialOutput(
                             text = final_output,
-                            evidence = evidence_items,
                             tool_calls = tool_calls # 말 안 들으면 빼버리자.. 
                         )
                     
                     elif agent_role == "debate":
-                        # 만약 상대의 발언을 요약했다면.. 
-                        summarized_opponent = str(decision.get("opponent_text", opponent_text)).strip()
-
                         return DebateOutput(
                             text = final_output,
-                            opponent_text = summarized_opponent, # 말 안 들으면 빼버리자.. 
-                            evidence = evidence_items,
                             tool_calls = tool_calls # 말 안 들으면 빼버리자.. 
                         )
                     break
@@ -305,26 +291,15 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
                 )
             final_output = _extract_output_only(final_output)
 
-            evidence_items = []
-            if isinstance(raw_evidence, list):
-                for evidence in raw_evidence:
-                    try:
-                        evidence_items.append(EvidenceItem(**evidence))
-                    except Exception:
-                        pass
-
             if agent_role == "initial":
                 return InitialOutput(
                 text = final_output,
-                    evidence = evidence_items,
                     tool_calls = tool_calls
                 )
 
             elif agent_role == "debate":
                 return DebateOutput(
                     text = final_output,
-                    opponent_text = opponent_text,
-                    evidence = evidence_items,
                     tool_calls = tool_calls
                 )
 
