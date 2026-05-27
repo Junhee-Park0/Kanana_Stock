@@ -14,6 +14,8 @@ class DebateAgentState(TypedDict):
     sources : Annotated[List[Dict[str, Any]], operator.add]
 
     debate_history : Annotated[List[str], operator.add]
+    optimist_used_arguments: Annotated[list[str], operator.add]
+    pessimist_used_arguments: Annotated[list[str], operator.add]
 
     turn_count : int 
     max_turns : int 

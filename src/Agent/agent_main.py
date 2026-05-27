@@ -21,7 +21,7 @@ def main(ticker : str):
         "sources" : [],
         "tool_calls" : [],
         "turn_count" : 0,
-        "max_turns" : 4,
+        "max_turns" : 6,
         "current_agent" : "start",
         "final_consensus" : None
     }

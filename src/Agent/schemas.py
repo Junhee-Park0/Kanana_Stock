@@ -27,6 +27,7 @@ class DebateOutput(BaseModel):
 
 class ConsensusOutput(BaseModel):
     """중재자 에이전트 최종 결론 출력 형식"""
+    key_issues: str = Field(default = "", description = "토론의 핵심 쟁점 요약")
     pros: str = Field(..., description = "핵심 기회 요인 요약")
     cons: str = Field(..., description = "핵심 리스크 요인 요약")
     recommendation: Literal["매수", "매도", "보류"] = Field(..., description = "최종 투자 의견")
@@ -36,7 +37,9 @@ class ConsensusOutput(BaseModel):
     def to_report_text(self) -> str:
         """보고서 텍스트 형식으로 변환"""
         report = []
-        report.append(f"**토론 흐름 요약**")
+        report.append("**토론 흐름 요약**")
+        if self.key_issues:
+            report.append(f"[핵심 쟁점]\n{self.key_issues}")
         if self.pros:
             report.append(f"[핵심 기회 요인 (Pros)]\n{self.pros}")
         if self.cons:

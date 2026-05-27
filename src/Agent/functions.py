@@ -93,53 +93,6 @@ def _collect_sources(
     return collected
 
 
-def unique_sources(sources: List[dict]) -> List[dict]:
-    """출처 중복 제거 (뉴스: url, 공시: form+filed_date 기준)"""
-    seen: set = set()
-    unique: List[dict] = []
-    for source in sources:
-        if source.get("source_type") == "news":
-            key = ("news", source.get("url") or source.get("title"))
-        else:
-            key = ("filing", source.get("form"), source.get("filed_date"))
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(source)
-    return unique
-
-
-def format_sources_block(sources: List[dict]) -> str:
-    """state에 모인 출처를 보고서용 텍스트로 포맷"""
-    news = [s for s in sources if s.get("source_type") == "news"]
-    filings = [s for s in sources if s.get("source_type") == "filing"]
-    if not news and not filings:
-        return ""
-
-    lines = ["## 참고자료"]
-    if news:
-        lines.append("[뉴스]")
-        for item in news:
-            title = item.get("title") or "제목 없음"
-            url = item.get("url", "")
-            lines.append(f"- {title}\n  ({url})" if url else f"- {title}")
-    if filings:
-        lines.append("[공시]")
-        for item in filings:
-            form = item.get("form", "")
-            filed_date = item.get("filed_date", "")
-            lines.append(f"- {form} ({filed_date})")
-    return "\n".join(lines)
-
-
-def _build_agent_output(agent_role: str, text: str, tool_calls: list, sources: list):
-    """agent_role에 맞는 Output 객체 생성"""
-    unique = unique_sources(sources)
-    if agent_role == "initial":
-        return InitialOutput(text = text, tool_calls = tool_calls, sources = unique)
-    return DebateOutput(text = text, tool_calls = tool_calls, sources = unique)
-    
-
 def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] = "initial"):
     """
     Kanana용 수동 Tool-Calling (직접 llm을 불러와 Tool과 연결)
@@ -161,6 +114,22 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
                 f"- {name}: {getattr(tool, 'description', '').strip()}"
                 for name, tool in tool_map.items()
             )
+            task_context_parts = [f"### 분석 대상 종목 ###\n{ticker}\n"]
+            if input_text:
+                task_context_parts.append(f"### 이번 턴 지시 및 맥락 ###\n{input_text}\n")
+            if agent_role == "debate" and opponent_text:
+                task_context_parts.append(
+                    "### 반드시 반박할 상대방 의견 ###\n"
+                    f"{opponent_text}\n"
+                    "위 상대방 주장을 반드시 직접 인용·반박하십시오. 상대 의견을 무시한 일반 분석은 실패입니다.\n"
+                )
+            if chat_history:
+                history_block = "\n".join(str(item) for item in chat_history).strip()
+                if history_block:
+                    task_context_parts.append(f"### 참고 대화 기록 ###\n{history_block}\n")
+            if tool_specs:
+                task_context_parts.append(f"### 사용 가능한 도구 ###\n{tool_specs}\n")
+            task_context = "\n".join(task_context_parts)
             scratchpad = []
             final_output = ""
             max_steps = 2
@@ -168,7 +137,6 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
             sources = []
             news_index = {}
             filing_index = {}
-            ticker = str(payload.get("ticker", "")).strip().upper()
 
             # 모델이 툴 호출을 누락하는 경우를 대비해 자동으로 Tool 호출
             auto_tool_call = []
@@ -292,9 +260,20 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
 
                 today = datetime.now().strftime("%Y년 %m월 %d일")
                 
+                debate_rules = ""
+                if agent_role == "debate":
+                    debate_rules = (
+                        "### 토론 필수 규칙 ###\n"
+                        "1. 상대방이 방금 제시한 주장을 먼저 인용한 뒤, 데이터·뉴스 근거로 반박하십시오.\n"
+                        "2. 상대 의견과 무관한 새 주제로 답하지 마십시오.\n"
+                        "3. 이미 토론 기록에 나온 문장·논리를 그대로 반복하지 마십시오.\n\n"
+                    )
+
                 # 매번 기존 프롬프트에 더해서 넣어주는 내용
                 iteration_prompt = (
                     f"{system_prompt}\n\n"
+                    f"{task_context}\n"
+                    f"{debate_rules}"
                     "### 최신성 사수: 시점 관리 규칙 ###\n"
                     f"1. [현재 시점]: 지금은 **{today}**입니다.\n"
                     "2. [데이터 필터링]: 2023~2024년 데이터는 '과거 기록'일 뿐입니다. 반드시 **2025년 하반기 이후의 뉴스 및 공시**를 우선적으로 탐색하십시오.\n"
@@ -403,13 +382,78 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
 
     return _AgentExecutor()
 
+def extract_used_arguments(text: str, ticker: str) -> list[str]:
+    """
+    발언에서 핵심 논거 키워드를 추출하는 경량 LLM 호출
+    """
+    prompt = (
+        f"아래는 {ticker} 주식 토론에서 한 쪽이 사용한 발언입니다.\n"
+        f"이 발언에서 사용된 핵심 투자 논거를 최대 5개 추출하십시오.\n\n"
+        f"[추출 규칙]\n"
+        f"- 넓은 개념(예: '매출 성장', '리스크 존재') 대신, 발언에서 실제로 주장한 구체적인 근거 단위로 추출하십시오.\n"
+        f"- 업종에 관계없이 해당 발언의 핵심 논리를 담은 10~20자 이내의 명사구로 작성하십시오.\n"
+        f"  (예: 반도체라면 '공급 계약 매출 전환율 저조', 유통이라면 '재고자산 회전율 악화', 바이오라면 '임상 3상 실패 리스크' 등)\n"
+        f"- 쉼표로 구분하여 출력하고, 키워드 외 다른 텍스트는 절대 출력하지 마십시오.\n\n"
+        f"발언:\n{text}"
+    )
+    result = call_kanana(prompt, {}, max_new_tokens=150).strip()
+
+    if "," not in result and "\n" in result:
+        return [arg.strip() for arg in result.split("\n") if arg.strip()]
+
+    return [arg.strip() for arg in result.split(",") if arg.strip()]
+
 def should_continue(state: DebateAgentState) -> Literal["continue", "stop"]:
     """
     should_continue_node의 결과를 받아서 다음 단계로 라우팅
     """
-    if state.get("turn_count", 0) >= state.get("max_turns", 4):
+    if state.get("turn_count", 0) >= state.get("max_turns", 6):
         return "stop"
     decision = state.get("should_continue", "continue")
     return "stop" if decision == "stop" else "continue"
 
+def unique_sources(sources: List[dict]) -> List[dict]:
+    """출처 중복 제거 (뉴스: url, 공시: form+filed_date 기준)"""
+    seen: set = set()
+    unique: List[dict] = []
+    for source in sources:
+        if source.get("source_type") == "news":
+            key = ("news", source.get("url") or source.get("title"))
+        else:
+            key = ("filing", source.get("form"), source.get("filed_date"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(source)
+    return unique
 
+
+def format_sources_block(sources: List[dict]) -> str:
+    """state에 모인 출처를 보고서용 텍스트로 포맷"""
+    news = [s for s in sources if s.get("source_type") == "news"]
+    filings = [s for s in sources if s.get("source_type") == "filing"]
+    if not news and not filings:
+        return ""
+
+    lines = ["## 참고자료"]
+    if news:
+        lines.append("[뉴스]")
+        for item in news:
+            title = item.get("title") or "제목 없음"
+            url = item.get("url", "")
+            lines.append(f"- {title}\n  ({url})" if url else f"- {title}")
+    if filings:
+        lines.append("[공시]")
+        for item in filings:
+            form = item.get("form", "")
+            filed_date = item.get("filed_date", "")
+            lines.append(f"- {form} ({filed_date})")
+    return "\n".join(lines)
+
+
+def _build_agent_output(agent_role: str, text: str, tool_calls: list, sources: list):
+    """agent_role에 맞는 Output 객체 생성"""
+    unique = unique_sources(sources)
+    if agent_role == "initial":
+        return InitialOutput(text = text, tool_calls = tool_calls, sources = unique)
+    return DebateOutput(text = text, tool_calls = tool_calls, sources = unique)
