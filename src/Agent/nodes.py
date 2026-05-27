@@ -4,9 +4,9 @@ from datetime import datetime
 from pathlib import Path
 from config import Config
 
-from src.Agent.kanana_pipeline import call_kanana_structured, extract_pure_text
+from src.Agent.kanana_pipeline import call_kanana, call_kanana_structured, extract_pure_text
 from src.Agent.states import DebateAgentState
-from src.Agent.functions import load_prompt, create_agent
+from src.Agent.functions import load_prompt, create_agent, format_sources_block, unique_sources
 from src.Agent.schemas import ConsensusOutput
 from src.Agent.tools import search_recent_news, search_recent_filings, read_news_content, read_parsed_filing
 from utils.logger import log_agent_action
@@ -43,7 +43,8 @@ def optimistic_initial_node(state : DebateAgentState):
 
     return {
         "optimist_initial" : clean_output,
-        "tool_calls" : response.tool_calls
+        "tool_calls" : response.tool_calls,
+        "sources" : response.sources
     }
 
 def pessimistic_initial_node(state : DebateAgentState):
@@ -77,7 +78,8 @@ def pessimistic_initial_node(state : DebateAgentState):
 
     return {
         "pessimist_initial" : clean_output,
-        "tool_calls" : response.tool_calls
+        "tool_calls" : response.tool_calls,
+        "sources" : response.sources
     }
 
 def optimistic_debate_node(state : DebateAgentState):
@@ -143,7 +145,8 @@ def optimistic_debate_node(state : DebateAgentState):
         "debate_history" : [new_history],
         "turn_count": turn + 1,
         "current_agent": "optimist",
-        "tool_calls" : response.tool_calls
+        "tool_calls" : response.tool_calls,
+        "sources" : response.sources
     }
 
 def pessimistic_debate_node(state : DebateAgentState):
@@ -208,8 +211,25 @@ def pessimistic_debate_node(state : DebateAgentState):
         "debate_history" : [new_history],
         "turn_count" : turn + 1,
         "current_agent" : "pessimist",
-        "tool_calls" : response.tool_calls
+        "tool_calls" : response.tool_calls,
+        "sources" : response.sources
     }
+
+def should_continue_node(state: DebateAgentState):
+    """
+    토론을 계속할지 중재자로 넘어갈지 결정하는 노드
+    """
+    turn = state.get("turn_count", 0)
+    max_turns = state.get("max_turns", 4)
+    history_list = state.get("debate_history", [])
+    history_str = "\n".join(history_list) if history_list else "없음"
+
+    system_prompt = load_prompt("continue_debate_prompt", turn_count = turn, max_turns = max_turns, history = history_str)
+
+    result = call_kanana(system_prompt, {}, max_new_tokens = 10).strip().lower()
+    decision = "stop" if "stop" in result else "continue"   
+
+    return {"should_continue": decision}
 
 def summary_node(state: DebateAgentState):
     """
@@ -217,6 +237,8 @@ def summary_node(state: DebateAgentState):
     """
     print("\n😐 [중재자] ------------------")
     ticker = state["ticker"]
+    all_sources = unique_sources(state.get("sources", []))
+    sources_text = format_sources_block(all_sources)
     # 프롬프트 로드
     system_prompt = load_prompt("neutral_prompt")
     # 토론 맥락 취합
@@ -226,7 +248,8 @@ def summary_node(state: DebateAgentState):
         "ticker": ticker, 
         "optimist_initial": state.get("optimist_initial", "내용 없음."),
         "pessimist_initial": state.get("pessimist_initial", "내용 없음."),
-        "history": history_str
+        "history": history_str,
+        "sources": sources_text or "출처 없음"
     }
     # 에이전트 실행 (Tool Calling 필요 없으므로 일반 invoke 사용)
     consensus = None
@@ -239,6 +262,8 @@ def summary_node(state: DebateAgentState):
         )
     # 결과 반환
         final_report = consensus.to_report_text
+        if sources_text:
+            final_report = f"{final_report}\n\n[출처]\n{sources_text}"
         
     except Exception as e:
         print(f"❌ 중재자 노드 오류: {e}")
@@ -258,6 +283,8 @@ def save_debate_node(state : DebateAgentState):
     """
     print("\n[System] 결과 저장 중...")
     ticker = state["ticker"]
+    all_sources = unique_sources(state.get("sources", []))
+    sources_text = format_sources_block(all_sources)
     # 전체 기록 구성
     date_str = datetime.now().strftime("%Y%m%d%H%M%S")
     debate_path = Path(f"{Config.DEBATE_HISTORY_PATH}/{ticker}/{date_str}")
@@ -273,8 +300,10 @@ def save_debate_node(state : DebateAgentState):
         "\n[2. Pessimist Initial Opinion]", state.get("pessimist_initial", ""),
         "\n[3. Full Debate History]", "\n".join(state.get("debate_history", [])),
         "\n[4. Final Consensus Report]", state.get("final_consensus", "No consensus reached."),
-        f"\n{'='*50}",
     ]
+    if sources_text:
+        full_report.extend(["\n[5. References]", sources_text])
+    full_report.append(f"\n{'='*50}")
     try:
         report_content = "\n".join(full_report)
         with open(debate_path / "full_report.txt", "w", encoding = "utf-8") as f:

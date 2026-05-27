@@ -3,9 +3,9 @@ from langgraph.graph import StateGraph, END, START
 
 from src.Agent.states import DebateAgentState
 from src.Agent.nodes import (
-    optimistic_initial_node, pessimistic_initial_node, 
-    optimistic_debate_node, pessimistic_debate_node, 
-    summary_node, save_debate_node)
+    optimistic_initial_node, pessimistic_initial_node,
+    optimistic_debate_node, pessimistic_debate_node,
+    should_continue_node, summary_node, save_debate_node)
 from src.Agent.functions import should_continue
 
 def agent_debate_graph():
@@ -19,6 +19,7 @@ def agent_debate_graph():
     workflow.add_node("[Initial] Pessimist", pessimistic_initial_node)
     workflow.add_node("[Debate] Optimist", optimistic_debate_node)
     workflow.add_node("[Debate] Pessimist", pessimistic_debate_node)
+    workflow.add_node("Should Continue", should_continue_node)
     workflow.add_node("Consensus Generator", summary_node)
     workflow.add_node("Save Session", save_debate_node)
 
@@ -36,16 +37,20 @@ def agent_debate_graph():
     # 4. 비관론자 반박 
     workflow.add_edge("[Debate] Optimist", "[Debate] Pessimist")
 
+    # 5. 토론 지속 여부 판정
+    workflow.add_edge("[Debate] Pessimist", "Should Continue")
+
     # 5. 조건부 루프 
     workflow.add_conditional_edges(
-        "[Debate] Pessimist",
+        "Should Continue",
         should_continue,
         {
-            "optimist" : "[Debate] Optimist",
-            "summary" : "Consensus Generator"
+            "continue" : "[Debate] Optimist",
+            "stop" : "Consensus Generator"
         }
     )
 
     workflow.add_edge("Consensus Generator", "Save Session")
     workflow.add_edge("Save Session", END)
     return workflow.compile()
+

@@ -1,4 +1,4 @@
-from typing import Dict, Literal, Any
+from typing import Dict, Literal, Any, List
 import yaml
 import json
 from datetime import datetime
@@ -36,6 +36,110 @@ def load_prompt(prompt_name: str, **kwargs) -> str:
             f"Prompt '{prompt_name}' requires variable '{missing_key}' but it was not provided."
         ) from e
 
+def _collect_sources(
+    tool_name: str,
+    args: dict,
+    result: Any,
+    news_index: dict,
+    filing_index: dict,
+) -> List[dict]:
+    """tool 호출 결과에서 출처 메타데이터만 추출 (뉴스: 제목/url, 공시: 종류/날짜)"""
+    collected: List[dict] = []
+
+    if tool_name == "search_recent_news" and isinstance(result, list):
+        for row in result:
+            if not isinstance(row, dict):
+                continue
+            article_id = str(row.get("article_id", ""))
+            title = str(row.get("title", "") or "")
+            url = str(row.get("html", "") or "")
+            if article_id:
+                news_index[article_id] = {"title": title, "url": url}
+            if title or url:
+                collected.append({"source_type": "news", "title": title, "url": url})
+
+    elif tool_name == "search_recent_filings" and isinstance(result, list):
+        for row in result:
+            if not isinstance(row, dict):
+                continue
+            parsed_path = str(row.get("parsed_path", "") or "")
+            form = str(row.get("form", "") or "")
+            filed_date = str(row.get("filed_date", "") or "")
+            if parsed_path:
+                filing_index[parsed_path] = {"form": form, "filed_date": filed_date}
+            if form or filed_date:
+                collected.append({"source_type": "filing", "form": form, "filed_date": filed_date})
+
+    elif tool_name == "read_news_content":
+        article_id = str(args.get("article_id", ""))
+        meta = news_index.get(article_id)
+        if meta and (meta.get("title") or meta.get("url")):
+            collected.append({
+                "source_type": "news",
+                "title": meta["title"],
+                "url": meta["url"],
+            })
+
+    elif tool_name == "read_parsed_filing":
+        file_path = str(args.get("file_path", ""))
+        meta = filing_index.get(file_path)
+        if meta and (meta.get("form") or meta.get("filed_date")):
+            collected.append({
+                "source_type": "filing",
+                "form": meta["form"],
+                "filed_date": meta["filed_date"],
+            })
+
+    return collected
+
+
+def unique_sources(sources: List[dict]) -> List[dict]:
+    """출처 중복 제거 (뉴스: url, 공시: form+filed_date 기준)"""
+    seen: set = set()
+    unique: List[dict] = []
+    for source in sources:
+        if source.get("source_type") == "news":
+            key = ("news", source.get("url") or source.get("title"))
+        else:
+            key = ("filing", source.get("form"), source.get("filed_date"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(source)
+    return unique
+
+
+def format_sources_block(sources: List[dict]) -> str:
+    """state에 모인 출처를 보고서용 텍스트로 포맷"""
+    news = [s for s in sources if s.get("source_type") == "news"]
+    filings = [s for s in sources if s.get("source_type") == "filing"]
+    if not news and not filings:
+        return ""
+
+    lines = ["## 참고자료"]
+    if news:
+        lines.append("[뉴스]")
+        for item in news:
+            title = item.get("title") or "제목 없음"
+            url = item.get("url", "")
+            lines.append(f"- {title}\n  ({url})" if url else f"- {title}")
+    if filings:
+        lines.append("[공시]")
+        for item in filings:
+            form = item.get("form", "")
+            filed_date = item.get("filed_date", "")
+            lines.append(f"- {form} ({filed_date})")
+    return "\n".join(lines)
+
+
+def _build_agent_output(agent_role: str, text: str, tool_calls: list, sources: list):
+    """agent_role에 맞는 Output 객체 생성"""
+    unique = unique_sources(sources)
+    if agent_role == "initial":
+        return InitialOutput(text = text, tool_calls = tool_calls, sources = unique)
+    return DebateOutput(text = text, tool_calls = tool_calls, sources = unique)
+    
+
 def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] = "initial"):
     """
     Kanana용 수동 Tool-Calling (직접 llm을 불러와 Tool과 연결)
@@ -61,6 +165,9 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
             final_output = ""
             max_steps = 2
             tool_calls = []
+            sources = []
+            news_index = {}
+            filing_index = {}
             ticker = str(payload.get("ticker", "")).strip().upper()
 
             # 모델이 툴 호출을 누락하는 경우를 대비해 자동으로 Tool 호출
@@ -93,6 +200,9 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
                             args = args,
                             result_count = result_count
                         )
+                        sources.extend(_collect_sources(
+                            tool_name, args, auto_tool_call_result, news_index, filing_index
+                        ))
                         scratchpad.append(
                             f"[Step 0] Tool `{tool_name}` args = {json.dumps(args, ensure_ascii = False)}\n"
                             f"Result: {auto_tool_call_result_text}"
@@ -128,6 +238,9 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
                                 args = args,
                                 result_count = None
                             )
+                            sources.extend(_collect_sources(
+                                "read_news_content", args, read_result, news_index, filing_index
+                            ))
                             scratchpad.append(
                                 f"[Step 0] Tool `read_news_content` args = {json.dumps(args, ensure_ascii = False)}\n"
                                 f"Result: {read_text}"
@@ -161,6 +274,9 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
                                 args = args,
                                 result_count = None
                             )
+                            sources.extend(_collect_sources(
+                                "read_parsed_filing", args, read_result, news_index, filing_index
+                            ))
                             scratchpad.append(
                                 f"[Step 0] Tool `read_parsed_filing` args = {json.dumps(args, ensure_ascii = False)}\n"
                                 f"Result: {read_text}"
@@ -230,18 +346,7 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
                         final_output = model_text.strip()
 
                     # 역할별 출력값 할당
-                    if agent_role == "initial":
-                        return InitialOutput(
-                            text = final_output,
-                            tool_calls = tool_calls # 말 안 들으면 빼버리자.. 
-                        )
-                    
-                    elif agent_role == "debate":
-                        return DebateOutput(
-                            text = final_output,
-                            tool_calls = tool_calls # 말 안 들으면 빼버리자.. 
-                        )
-                    break
+                    return _build_agent_output(agent_role, final_output, tool_calls, sources)
 
                 if action != "tool":
                     final_output = model_text
@@ -275,6 +380,9 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
                         args = args,
                         result_count = result_count
                     )
+                    sources.extend(_collect_sources(
+                        tool_name, args, tool_result, news_index, filing_index
+                    ))
                     scratchpad.append(
                         f"[Step {step}] Tool `{tool_name}` args = {json.dumps(args, ensure_ascii = False)}\n"
                         f"Result: {tool_result_text}"
@@ -291,26 +399,17 @@ def create_agent(tools, system_prompt, agent_role: Literal["initial", "debate"] 
                 )
             final_output = _extract_output_only(final_output)
 
-            if agent_role == "initial":
-                return InitialOutput(
-                text = final_output,
-                    tool_calls = tool_calls
-                )
-
-            elif agent_role == "debate":
-                return DebateOutput(
-                    text = final_output,
-                    tool_calls = tool_calls
-                )
+            return _build_agent_output(agent_role, final_output, tool_calls, sources)
 
     return _AgentExecutor()
 
-def should_continue(state: DebateAgentState) -> Literal["optimist", "summary"]:
+def should_continue(state: DebateAgentState) -> Literal["continue", "stop"]:
     """
-    토론을 계속할지 중재자로 넘어갈지 결정하는 조건부 엣지 함수
+    should_continue_node의 결과를 받아서 다음 단계로 라우팅
     """
-    if state["turn_count"] >= state["max_turns"]:
-        return "summary"
-    return "optimist"
+    if state.get("turn_count", 0) >= state.get("max_turns", 4):
+        return "stop"
+    decision = state.get("should_continue", "continue")
+    return "stop" if decision == "stop" else "continue"
 
 

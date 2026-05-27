@@ -1,15 +1,29 @@
 from typing import List, Dict, Optional, Literal, Any
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field
+
+class NewsSource(BaseModel):
+    """뉴스 출처 (제목, URL)"""
+    source_type: Literal["news"] = "news"
+    title: str = Field(default = "", description = "기사 제목")
+    url: str = Field(default = "", description = "기사 URL")
+
+class FilingSource(BaseModel):
+    """공시 출처 (종류, 제출일)"""
+    source_type: Literal["filing"] = "filing"
+    form: str = Field(default = "", description = "공시 종류 (10-K, 8-K 등)")
+    filed_date: str = Field(default = "", description = "공시 제출일")
 
 class InitialOutput(BaseModel):
     """에이전트 초기 의견 출력 형식"""
     text: str = Field(..., description = "초기 의견 텍스트")
     tool_calls: List[Dict[str, Any]] = Field(..., description = "도구 호출 기록 리스트")
+    sources: List[Dict[str, Any]] = Field(..., description = "참고 출처 목록")
 
 class DebateOutput(BaseModel):
     """에이전트 토론 중 의견 출력 형식"""
     text: str = Field(..., description = "토론 중 의견 텍스트")
     tool_calls: List[Dict[str, Any]] = Field(..., description = "도구 호출 기록 리스트")
+    sources: List[Dict[str, Any]] = Field(..., description = "참고 출처 목록")
 
 class ConsensusOutput(BaseModel):
     """중재자 에이전트 최종 결론 출력 형식"""

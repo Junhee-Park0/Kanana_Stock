@@ -18,6 +18,8 @@ def main(ticker : str):
         "optimist_initial" : "",
         "pessimist_initial" : "",
         "debate_history" : [],
+        "sources" : [],
+        "tool_calls" : [],
         "turn_count" : 0,
         "max_turns" : 4,
         "current_agent" : "start",

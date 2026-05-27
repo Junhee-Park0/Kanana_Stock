@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, TypedDict, Optional
+from typing import List, Dict, Any, TypedDict, Optional, Literal
 from typing import Annotated
 import operator
 
@@ -10,12 +10,14 @@ class DebateAgentState(TypedDict):
     optimist_initial : str
     pessimist_initial : str
 
-    tool_calls : List[Dict[str, Any]]
+    tool_calls : Annotated[List[Dict[str, Any]], operator.add]
+    sources : Annotated[List[Dict[str, Any]], operator.add]
 
     debate_history : Annotated[List[str], operator.add]
 
     turn_count : int 
     max_turns : int 
     current_agent : str
-    
+    should_continue : Literal["continue", "stop"]
+
     final_consensus : Optional[str]
